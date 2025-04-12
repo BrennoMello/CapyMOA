@@ -15,8 +15,7 @@ import numpy as np
 import time
 
 
-
-def prequential_cd_dplds_evaluation(
+def prequential_cd_evaluation(
     stream: Stream,
     learner: Union[ClassifierSSL, Classifier],
     max_instances: Optional[int] = None,
@@ -127,7 +126,7 @@ def prequential_cd_dplds_evaluation(
     unlabeled_counter = 0
 
     progress_bar = _setup_progress_bar(
-        "CD Dplds Eval", progress_bar, stream, learner, max_instances
+        "CD Eval", progress_bar, stream, learner, max_instances
     )
     for i, instance in enumerate(stream):
         prediction = learner.predict(instance)
