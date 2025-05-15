@@ -10,6 +10,7 @@ from .rddm import RDDM
 from .seed import SEED
 from .stepd import STEPD
 from .abcd import ABCD
+from .seq_drift_1 import SeqDrift1ChangeDetector
 
 __all__ = [
     "ADWIN",
@@ -24,4 +25,5 @@ __all__ = [
     "SEED",
     "STEPD",
     "ABCD",
+    "SeqDrift1ChangeDetector",
 ]

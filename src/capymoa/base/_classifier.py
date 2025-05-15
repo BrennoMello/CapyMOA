@@ -150,12 +150,14 @@ class MOAClassifier(Classifier):
     def __init__(self, moa_learner, schema=None, CLI=None, random_seed=1):
         super().__init__(schema=schema, random_seed=random_seed)
         self.CLI = CLI
+  
         # If moa_learner is a class identifier instead of an object
         if isinstance(moa_learner, type):
             if isinstance(moa_learner, _jpype._JClass):
                 moa_learner = moa_learner()
             else:  # this is not a Java object, thus it certainly isn't a MOA learner
                 raise ValueError("Invalid MOA classifier provided.")
+            
         self.moa_learner = moa_learner
 
         self.moa_learner.setRandomSeed(self.random_seed)
@@ -172,6 +174,17 @@ class MOAClassifier(Classifier):
         self.moa_learner.resetLearningImpl()
         self.moa_learner.setModelContext(schema.get_moa_header())
 
+    def __deepcopy__(self, memo):
+        """Deep copy the MOA classifier."""
+        # Create a new instance of the class
+        
+        new_instance = self.__class__(schema=self.schema, random_seed=self.random_seed)
+       
+        # Copy the attributes
+        memo[id(self)] = new_instance
+
+        return new_instance
+    
     def __str__(self):
         # Removes the package information from the name of the learner.
         full_name = str(self.moa_learner.getClass().getCanonicalName())
@@ -191,6 +204,12 @@ class MOAClassifier(Classifier):
     def predict_proba(self, instance):
         return self.moa_learner.getVotesForInstance(instance.java_instance)
 
+    def reset(self):
+        """Reset the learning process of the MOA classifier."""
+        self.moa_learner.resetLearningImpl()
+        
+       
+        
 
 class SKClassifier(Classifier):
     """A wrapper class for using scikit-learn classifiers in CapyMOA.

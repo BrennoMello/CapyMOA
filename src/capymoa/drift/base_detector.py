@@ -110,3 +110,18 @@ class MOADriftDetector(BaseDriftDetector):
     def get_params(self) -> Dict[str, Any]:
         options = list(self.moa_detector.getOptions().getOptionArray())
         return {opt.getName(): opt.getValueAsCLIString() for opt in options}
+
+    def get_votes(self):
+        """Get the votes of the current detector.
+
+        :return: The votes of the current detector.
+        """
+        return self.moa_detector.getOutput()
+
+    def reset(self, clean_history = False):
+        """Reset the drift detector.
+
+        :param clean_history: Whether to reset detection history, defaults to False
+        """
+        super().reset(clean_history=clean_history)
+        self.moa_detector.resetLearning()
