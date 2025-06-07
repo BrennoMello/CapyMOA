@@ -55,12 +55,18 @@ def docs_build(ctx: Context, ignore_warnings: bool = False):
         print("Documentation is built and available at:")
         print(f"  file://{doc_dir.resolve()}/index.html")
         print("You can copy and paste this URL into your browser.")
-    except UnexpectedExit:
+    except UnexpectedExit as err:
         print("-" * 80)
-        print("Documentation build failed. Here are some tips:")
-        print("  - Check the Sphinx output for errors and warnings.")
-        print("  - Try running `invoke docs.clean` to remove cached files.")
-        print("  - Try running with `--ignore-warnings` to ignore warnings.")
+        print(
+            "Documentation build failed. Here are some tips:\n"
+            " - Check the Sphinx output for errors and warnings.\n"
+            " - Try running `invoke docs.clean` to remove cached files.\n"
+            " - Try running with `--ignore-warnings` to ignore warnings.\n"
+            "   The build in CI pipelines will still fail but this might\n"
+            "   help you fix the warnings locally.\n"
+        )
+        # Ensure error code is propagated for CI/CD pipelines
+        raise SystemExit(err.result.return_code)
 
 
 @task
@@ -185,7 +191,7 @@ def clean(ctx: Context):
         "no_skip": "Do not skip any notebooks.",
     }
 )
-def test_notebooks(
+def notebooks(
     ctx: Context,
     parallel: bool = False,
     overwrite: bool = False,
@@ -230,28 +236,50 @@ def test_notebooks(
     if k_pattern:
         cmd += [f"-k {k_pattern}"]
 
-    ctx.run(" ".join(cmd))
+    ctx.run(" ".join(cmd), echo=True)
 
 
 @task
-def unittest(ctx: Context, parallel: bool = True):
+def pytest(ctx: Context, parallel: bool = True):
     """Run the tests using pytest."""
     cmd = [
         "python -m pytest",
-        "--doctest-modules",  # Run tests defined in docstrings
         "--durations=5",  # Show the duration of each test
-        "-x",  # Stop after the first failure
-        "-p no:faulthandler",  # jpype can raise irrelevant warnings: https://github.com/jpype-project/jpype/issues/561
+        "--exitfirst",  # Exit instantly on first error or failed test
+        # jpype can raise irrelevant warnings:
+        # https://github.com/jpype-project/jpype/issues/561
+        "-p no:faulthandler",
     ]
     cmd += ["-n=auto"] if parallel else []
-    ctx.run(" ".join(cmd))
+    ctx.run(" ".join(cmd), echo=True)
+
+
+@task
+def doctest(ctx: Context, parallel: bool = True):
+    """Run tests defined in docstrings using pytest."""
+    cmd = [
+        "python -m pytest",
+        "--doctest-modules",  # Enable doctest tests
+        "--durations=5",  # Show the duration of each test
+        "--exitfirst",  # Exit instantly on first error or failed test
+        # jpype can raise irrelevant warnings:
+        # https://github.com/jpype-project/jpype/issues/561
+        "-p no:faulthandler",
+        "src/capymoa",  # Don't run tests in the `tests` directory
+    ]
+    cmd += ["-n=auto"] if parallel else []
+    ctx.run(" ".join(cmd), echo=True)
 
 
 @task
 def all_tests(ctx: Context, parallel: bool = True):
     """Run all the tests."""
-    unittest(ctx, parallel)
-    test_notebooks(ctx, parallel)
+    print("Running all pytest tests ...")
+    pytest(ctx, parallel)
+    print("Running all doctests ...")
+    doctest(ctx, parallel)
+    print("Running all notebooks ...")
+    notebooks(ctx, parallel)
 
 
 @task
@@ -273,14 +301,15 @@ def lint(ctx: Context):
     ctx.run("python -m ruff check --fix")
 
 
-@task
+@task(aliases=["fmt"])
 def format(ctx: Context):
     """Format the code using ruff."""
-    ctx.run("python -m ruff format")
+    ctx.run("python -m ruff format", echo=True)
+    ctx.run("python -m ruff check --fix", echo=True)
 
 
 docs = Collection("docs")
-docs.add_task(docs_build, "build")
+docs.add_task(docs_build, "build", default=True)
 docs.add_task(docs_clean, "clean")
 docs.add_task(docs_coverage, "coverage")
 
@@ -293,8 +322,9 @@ build.add_task(clean)
 
 test = Collection("test")
 test.add_task(all_tests, "all", default=True)
-test.add_task(test_notebooks, "nb")
-test.add_task(unittest, "unit")
+test.add_task(notebooks, "nb")
+test.add_task(pytest, "pytest")
+test.add_task(doctest, "doctest")
 
 ns = Collection()
 ns.add_collection(docs)

@@ -1,4 +1,4 @@
-"""This module contains built-in datastream for online continual learning (OCL).
+"""Use built-in datasets for online continual learning.
 
 In OCL datastreams are irreversible sequences of examples following a
 non-stationary data distribution. Learners in OCL can only learn from a single
@@ -8,16 +8,16 @@ the datastream.
 Portions of the datastream where the data distribution is relatively stationary
 are called *tasks*.
 
-A common way to construct an OCL dataset for experimentation is to groups the
-classes of a usual classification dataset into tasks. Known as the
-*class-incremental* scenario, the learner is presented with a sequence of tasks
-where each task contains a new subset of the classes.
+A common way to construct an OCL dataset for experimentation is to group the
+classes of a classification dataset into tasks. Known as the *class-incremental*
+scenario, the learner is presented with a sequence of tasks where each task
+contains a new subset of the classes.
 
-For example :class:`SplitMNIST` splits the MNIST dataset into five tasks where each
-task contains two classes:
+For example :class:`SplitMNIST` splits the MNIST dataset into five tasks where
+each task contains two classes:
 
->>> from capymoa.datasets.ocl import SplitMNIST
->>> scenario = SplitMNIST()
+>>> from capymoa.ocl.datasets import SplitMNIST
+>>> scenario = SplitMNIST(preload_test=False)
 >>> scenario.task_schedule
 [{1, 4}, {5, 7}, {9, 3}, {0, 8}, {2, 6}]
 
@@ -29,8 +29,8 @@ To get the usual CapyMOA stream object for training:
 LabeledInstance(
     Schema(SplitMNISTTrain),
     x=[0. 0. 0. ... 0. 0. 0.],
-    y_index=1,
-    y_label='1'
+    y_index=4,
+    y_label='4'
 )
 
 CapyMOA streams flatten the data into a feature vector:
@@ -47,21 +47,37 @@ torch.Size([1, 28, 28])
 1
 """
 
+from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Callable, Optional, Tuple, Sequence, Set
-from capymoa.datasets import get_download_dir
-from capymoa.ocl.util.data import partition_by_schedule, class_incremental_schedule
-from capymoa.stream import TorchClassifyStream, Stream
-from capymoa.instance import LabeledInstance
-from capymoa.stream._stream import Schema
-import torch
+from typing import Any, Callable, Optional, Sequence, Set, Tuple
 from urllib.request import urlretrieve
-from torchvision import datasets
-from torch.utils.data import Dataset, TensorDataset
-from torch import Tensor
-from torchvision.transforms import ToTensor, Normalize, Compose
-from abc import abstractmethod, ABC
+
 import numpy as np
+import torch
+from torch import Tensor
+from torch.utils.data import DataLoader, Dataset, TensorDataset
+from torchvision import datasets
+from torchvision.transforms import Compose, Normalize, ToTensor
+
+from capymoa.datasets import get_download_dir
+from capymoa.instance import LabeledInstance
+from capymoa.ocl.util.data import class_incremental_schedule, partition_by_schedule
+from capymoa.stream import Stream, TorchClassifyStream
+from capymoa.stream._stream import Schema
+
+
+class _PreloadedDataset(TensorDataset):
+    def __getitems__(self, indices: Sequence[int]) -> Tuple[Tensor, ...]:
+        """Get items from the preloaded dataset."""
+        return tuple(tensor[indices] for tensor in self.tensors)
+
+    def collate_fn(self, batch: Tuple[Tensor, Tensor]) -> Tuple[Tensor, Tensor]:
+        """Collate function for PyTorch ``DataLoader``.
+
+        Is the identity function, since the data is already preloaded
+        and batched correctly.
+        """
+        return batch
 
 
 class _BuiltInCIScenario(ABC):
@@ -90,10 +106,10 @@ class _BuiltInCIScenario(ABC):
     default_task_count: int
     """The default number of tasks in the dataset."""
 
-    mean: Sequence[float]
+    mean: Optional[Sequence[float]]
     """The mean of the features in the dataset used for normalization."""
 
-    std: Sequence[float]
+    std: Optional[Sequence[float]]
     """The standard deviation of the features in the dataset used for normalization."""
 
     default_train_transform: Callable[[Any], Tensor] = ToTensor()
@@ -109,12 +125,15 @@ class _BuiltInCIScenario(ABC):
         self,
         num_tasks: Optional[int] = None,
         shuffle_tasks: bool = True,
+        shuffle_data: bool = True,
         seed: int = 0,
         directory: Path = get_download_dir(),
         auto_download: bool = True,
         train_transform: Optional[Callable[[Any], Tensor]] = None,
         test_transform: Optional[Callable[[Any], Tensor]] = None,
         normalize_features: bool = False,
+        preload_test: bool = True,
+        preload_train: bool = False,
     ):
         """Create a new online continual learning datamodule.
 
@@ -122,6 +141,7 @@ class _BuiltInCIScenario(ABC):
             defaults to :attr:`default_task_count`.
         :param shuffle_tasks: Should the contents and order of the tasks be
             shuffled, defaults to True.
+        :param shuffle_data: Should the training dataset be shuffled.
         :param seed: Seed for shuffling the tasks, defaults to 0.
         :param directory: The directory to download the dataset to, defaults to
             :func:`capymoa.datasets.get_download_dir`.
@@ -133,11 +153,17 @@ class _BuiltInCIScenario(ABC):
             defaults to :attr:`default_test_transform`.
         :param normalize_features: Should the features be normalized. This
             normalization step is after all other transformations.
+        :param preload_test: Should the test dataset be preloaded into CPU memory.
+            Helps with memory locality and speed, but increases memory usage.
+            Preloading the test dataset is recommended since it is small
+            and is used multiple times in evaluation.
+        :param preload_train: Should the training dataset be preloaded into CPU memory.
+            Helps with memory locality and speed, but increases memory usage.
+            Preloading the training dataset is not recommended, since it is large
+            and each sample is only seen once in online continual learning.
         """
         assert self.num_classes
         assert self.default_task_count
-        assert self.mean
-        assert self.std
 
         if num_tasks is None:
             num_tasks = self.default_task_count
@@ -146,9 +172,13 @@ class _BuiltInCIScenario(ABC):
         if test_transform is None:
             test_transform = self.default_test_transform
 
-        if normalize_features:
+        if normalize_features and self.mean is not None and self.std is not None:
             normalize = Normalize(self.mean, self.std)
             train_transform = Compose((train_transform, normalize))
+        elif normalize_features:
+            raise ValueError(
+                "Cannot normalize features since mean and std are not defined."
+            )
 
         # Set the number of tasks
         generator = torch.Generator().manual_seed(seed)
@@ -163,16 +193,25 @@ class _BuiltInCIScenario(ABC):
         test_dataset = self._download_dataset(
             False, directory, auto_download, test_transform
         )
-        self.train_tasks = partition_by_schedule(train_dataset, self.task_schedule)
+        self.train_tasks = partition_by_schedule(
+            train_dataset,
+            self.task_schedule,
+            shuffle=shuffle_data,
+            rng=generator,
+        )
         self.test_tasks = partition_by_schedule(test_dataset, self.task_schedule)
+
+        if preload_train:
+            self.train_tasks = self._preload_datasets(self.train_tasks)
+        if preload_test:
+            self.test_tasks = self._preload_datasets(self.test_tasks)
 
         # Create streams for training and testing
         dataset_prefix = self.__class__.__name__
         self.train_streams = _tasks_to_streams(
             self.train_tasks,
             num_classes=self.num_classes,
-            shuffle=True,
-            seed=seed + 1,
+            shuffle=False,
             dataset_name=f"{dataset_prefix}Train",
         )
         self.test_streams = _tasks_to_streams(
@@ -182,17 +221,87 @@ class _BuiltInCIScenario(ABC):
             dataset_name=f"{dataset_prefix}Test",
         )
         self.schema = self.train_streams[0].get_schema()
+        self.num_tasks = len(self.task_schedule)
+
+    @staticmethod
+    def _preload_datasets(
+        datasets: Sequence[Dataset[Tuple[Tensor, Tensor]]],
+    ) -> Sequence[TensorDataset]:
+        """Preload a sequence of datasets into memory.
+
+        :param datasets: A sequence of datasets to preload.
+        :return: A sequence of TensorDatasets containing the preloaded data.
+        """
+        return [_BuiltInCIScenario._preload_dataset(dataset) for dataset in datasets]
+
+    @staticmethod
+    def _preload_dataset(dataset: Dataset[Tuple[Tensor, Tensor]]) -> TensorDataset:
+        """Preload the dataset into memory.
+
+        :param dataset: The dataset to preload.
+        :return: A TensorDataset containing the preloaded data.
+        """
+        xs, ys = zip(*dataset)
+        return _PreloadedDataset(torch.stack(xs), torch.tensor(ys))
 
     @classmethod
     @abstractmethod
     def _download_dataset(
-        self,
+        cls,
         train: bool,
         directory: Path,
         auto_download: bool,
         transform: Optional[Any],
     ) -> Dataset[Tuple[Tensor, Tensor]]:
         pass
+
+    def __str__(self) -> str:
+        return f"{self.__class__.__name__}{self.num_classes}/{self.num_tasks}"
+
+    def train_loaders(
+        self, batch_size: int, **kwargs: Any
+    ) -> Sequence[DataLoader[Tuple[Tensor, Tensor]]]:
+        """Get the training streams for the scenario.
+
+        * The order of the tasks is fixed and does not change between iterations.
+          The datasets themselves are shuffled in :func:`__init__` if `shuffle_data`
+          is set to True. This is because the order of data is important in
+          online learning since the learner can only see each example once.
+
+        :param batch_size: Collects vectors in batches of this size.
+        :param kwargs: Additional keyword arguments to pass to the DataLoader.
+        :return: A data loader for each task.
+        """
+        return [
+            DataLoader(
+                task,
+                batch_size=batch_size,
+                shuffle=False,
+                **kwargs,
+                collate_fn=getattr(task, "collate_fn", None),
+            )
+            for task in self.train_tasks
+        ]
+
+    def test_loaders(
+        self, batch_size: int, **kwargs: Any
+    ) -> Sequence[DataLoader[Tuple[Tensor, Tensor]]]:
+        """Get the training streams for the scenario.
+
+        :param batch_size: Collects vectors in batches of this size.
+        :param kwargs: Additional keyword arguments to pass to the DataLoader.
+        :return: A data loader for each task.
+        """
+        return [
+            DataLoader(
+                task,
+                batch_size=batch_size,
+                shuffle=False,
+                **kwargs,
+                collate_fn=getattr(task, "collate_fn", None),
+            )
+            for task in self.test_tasks
+        ]
 
 
 def _tasks_to_streams(
@@ -278,7 +387,7 @@ class TinySplitMNIST(_BuiltInCIScenario):
 
     @classmethod
     def _download_dataset(
-        self,
+        cls,
         train: bool,
         directory: Path,
         auto_download: bool,
@@ -288,19 +397,97 @@ class TinySplitMNIST(_BuiltInCIScenario):
         if not filename.exists():
             if not auto_download:
                 raise FileNotFoundError(f"Dataset not found at {filename}")
-            urlretrieve(self.url, filename)
+            urlretrieve(cls.url, filename)
 
         data = np.load(filename)
         if train:
-            return TensorDataset(
+            return TensorDataset(  # type: ignore[return-value]
                 torch.from_numpy(data["train_x"]).float() / 255,
                 torch.from_numpy(data["train_y"]).int(),
             )
         else:
-            return TensorDataset(
+            return TensorDataset(  # type: ignore[return-value]
                 torch.from_numpy(data["test_x"]).float() / 255,
                 torch.from_numpy(data["test_y"]).int(),
             )
+
+
+class SplitCIFAR100ViT(_BuiltInCIScenario):
+    """CIFAR100 encoded by a Vision Transformer (ViT).
+
+    * Encoded using the ``vit_base_patch16_224_augreg_in21k`` pre-trained
+      backbone [1]_.
+    * 768 dimensional features (extracted from the last layer of the ViT).
+    * 100 classes.
+    * 50,000 training samples
+    * 10,000 testing samples
+    * Useful for developing and evaluating prototype based continual
+      learning algorithms.
+
+    ..  [1] Model card for ``vit_base_patch16_224.augreg_in21k``
+        https://huggingface.co/timm/vit_base_patch16_224.augreg_in21k
+    """
+
+    num_classes = 100
+    default_task_count = 10
+    _train_filename = "CIFAR100-vit_base_patch16_224_augreg_in21k-train.npz"
+    _test_filename = "CIFAR100-vit_base_patch16_224_augreg_in21k-test.npz"
+    _train_url = f"https://www.dropbox.com/scl/fi/42r7usdo41s7qigqwouh8/{_train_filename}?rlkey=nys3yxirtt84so9758t4kxrq8&st=71vcn6bu&dl=1"
+    _test_url = f"https://www.dropbox.com/scl/fi/i4c778jj8w2flcvpze7tc/{_test_filename}?rlkey=0sbh56s8rpgox9rw7i8j0py9q&st=fe59x2n8&dl=1"
+    default_train_transform = None
+    default_test_transform = None
+
+    @classmethod
+    def _download_dataset(
+        cls,
+        train: bool,
+        directory: Path,
+        auto_download: bool,
+        transform: Optional[Any],
+    ) -> Dataset[Tuple[Tensor, Tensor]]:
+        if transform is not None:
+            raise NotImplementedError(
+                "Transformations are not supported for this dataset."
+            )
+
+        filename = cls._train_filename if train else cls._test_filename
+        url = cls._train_url if train else cls._test_url
+        filename = directory / filename
+
+        if not filename.exists():
+            if not auto_download:
+                raise FileNotFoundError(f"Dataset not found at {filename}")
+            urlretrieve(url, filename)
+
+        data = np.load(filename)
+        return TensorDataset(  # type: ignore[return-value]
+            torch.from_numpy(data["x"]).float(),
+            torch.from_numpy(data["y"]).int(),
+        )
+
+
+class SplitCIFAR10ViT(SplitCIFAR100ViT):
+    """CIFAR10 encoded by a Vision Transformer (ViT).
+
+    * Encoded using the ``vit_base_patch16_224_augreg_in21k`` pre-trained
+      backbone [1]_.
+    * 768 dimensional features (extracted from the last layer of the ViT).
+    * 10 classes.
+    * 50,000 training samples
+    * 10,000 testing samples
+    * Useful for developing and evaluating prototype based continual learning
+      algorithms.
+
+    ..  [1] Model card for ``vit_base_patch16_224.augreg_in21k``
+        https://huggingface.co/timm/vit_base_patch16_224.augreg_in21k
+    """
+
+    num_classes = 10
+    default_task_count = 5
+    _train_filename = "CIFAR10-vit_base_patch16_224_augreg_in21k-train.npz"
+    _test_filename = "CIFAR10-vit_base_patch16_224_augreg_in21k-test.npz"
+    _train_url = f"https://www.dropbox.com/scl/fi/533la5ddo15644scyeklm/{_train_filename}?rlkey=lsesrbbd04uebtpepjx3g5c36&st=40lcnata&dl=1"
+    _test_url = f"https://www.dropbox.com/scl/fi/cpvqxrzo9wywkmwy0pz8p/{_test_filename}?rlkey=wt0zn099cgbdyfgk39r0wlb4e&st=mhe9b1gh&dl=1"
 
 
 class SplitFashionMNIST(_BuiltInCIScenario):

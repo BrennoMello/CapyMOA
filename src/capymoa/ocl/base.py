@@ -1,3 +1,10 @@
+"""Base classes for online continual learning algorithms.
+
+All OCL learners inherit from :class:`capymoa.base.Classifier` this module
+contains additional base classes for OCL learners that are aware of the task
+boundaries and/or the task identities during training and evaluation.
+"""
+
 from abc import ABC, abstractmethod
 
 
@@ -9,9 +16,9 @@ class TaskBoundaryAware(ABC):
     be mindful and communicate when a learner is task-aware.
 
     >>> from capymoa.classifier import NoChange
-    >>> from capymoa.datasets.ocl import TinySplitMNIST
-    >>> from capymoa.ocl import TaskBoundaryAware
-    >>> from capymoa.evaluation.ocl import ocl_train_eval_loop
+    >>> from capymoa.ocl.datasets import TinySplitMNIST
+    >>> from capymoa.ocl.base import TaskBoundaryAware
+    >>> from capymoa.ocl.evaluation import ocl_train_eval_loop
 
     >>> class MyTaskBoundaryAware(TaskBoundaryAware, NoChange):
     ...     def set_train_task(self, train_task_id: int):
@@ -19,7 +26,7 @@ class TaskBoundaryAware(ABC):
 
     >>> scenario = TinySplitMNIST()
     >>> learner = MyTaskBoundaryAware(scenario.schema)
-    >>> _ = ocl_train_eval_loop(learner, scenario.train_streams, scenario.test_streams)
+    >>> _ = ocl_train_eval_loop(learner, scenario.train_loaders(32), scenario.test_loaders(32))
     Training task 0
     Training task 1
     Training task 2
@@ -43,9 +50,9 @@ class TaskAware(TaskBoundaryAware):
     continual learning problem.
 
     >>> from capymoa.classifier import NoChange
-    >>> from capymoa.datasets.ocl import TinySplitMNIST
-    >>> from capymoa.ocl import TaskAware
-    >>> from capymoa.evaluation.ocl import ocl_train_eval_loop
+    >>> from capymoa.ocl.datasets import TinySplitMNIST
+    >>> from capymoa.ocl.base import TaskAware
+    >>> from capymoa.ocl.evaluation import ocl_train_eval_loop
 
     >>> class MyTaskAware(TaskAware, NoChange):
     ...     def set_train_task(self, train_task_id: int):
@@ -56,7 +63,7 @@ class TaskAware(TaskBoundaryAware):
 
     >>> scenario = TinySplitMNIST()
     >>> learner = MyTaskAware(scenario.schema)
-    >>> ocl_train_eval_loop(learner, scenario.train_streams, scenario.test_streams)
+    >>> ocl_train_eval_loop(learner, scenario.train_loaders(32), scenario.test_loaders(32))
     Training task 0
     Testing task 0
     Testing task 1

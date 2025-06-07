@@ -1,45 +1,47 @@
+import os
 from contextlib import nullcontext
 from dataclasses import dataclass
-from capymoa.evaluation import ClassificationEvaluator, ClassificationWindowedEvaluator
-from capymoa.classifier import (
-    EFDT,
-    HoeffdingTree,
-    AdaptiveRandomForestClassifier,
-    OnlineBagging,
-    NaiveBayes,
-    KNN,
-    StreamingGradientBoostedTrees,
-    OzaBoost,
-    MajorityClass,
-    NoChange,
-    OnlineSmoothBoost,
-    StreamingRandomPatches,
-    HoeffdingAdaptiveTree,
-    SAMkNN,
-    DynamicWeightedMajority,
-    CSMOTE,
-    LeveragingBagging,
-    OnlineAdwinBagging,
-    WeightedkNN,
-    ShrubsClassifier,
-)
-from capymoa.base import Classifier
-from capymoa.base import MOAClassifier
-from capymoa.datasets import ElectricityTiny
-from capymoa.misc import save_model, load_model
-from java.lang import Exception as JException
-import pytest
 from functools import partial
-from typing import Callable, Optional
-from capymoa.base import _extract_moa_learner_CLI
-from capymoa.splitcriteria import GiniSplitCriterion
-
-from capymoa.stream import Schema, Stream
-
-from capymoa.classifier import PassiveAggressiveClassifier, SGDClassifier
-from pytest_subtests import SubTests
 from tempfile import TemporaryDirectory
-import os
+from typing import Callable, Optional
+
+import pytest
+import torch
+from java.lang import Exception as JException
+from pytest_subtests import SubTests
+
+from capymoa.ann import Perceptron
+from capymoa.base import Classifier, MOAClassifier, _extract_moa_learner_CLI
+from capymoa.classifier import (
+    CSMOTE,
+    EFDT,
+    KNN,
+    AdaptiveRandomForestClassifier,
+    DynamicWeightedMajority,
+    Finetune,
+    HoeffdingAdaptiveTree,
+    HoeffdingTree,
+    LeveragingBagging,
+    MajorityClass,
+    NaiveBayes,
+    NoChange,
+    OnlineAdwinBagging,
+    OnlineBagging,
+    OnlineSmoothBoost,
+    OzaBoost,
+    PassiveAggressiveClassifier,
+    SAMkNN,
+    SGDClassifier,
+    ShrubsClassifier,
+    StreamingGradientBoostedTrees,
+    StreamingRandomPatches,
+    WeightedkNN,
+)
+from capymoa.datasets import ElectricityTiny
+from capymoa.evaluation import ClassificationEvaluator, prequential_evaluation
+from capymoa.misc import load_model, save_model
+from capymoa.splitcriteria import GiniSplitCriterion
+from capymoa.stream import Schema, Stream
 
 
 @dataclass
@@ -56,6 +58,7 @@ class ClassifierTestCase:
     """The expected CLI string of the learner."""
     is_serializable: bool = True
     """Whether the learner is serializable."""
+    batch_size: int = 1
 
 
 """
@@ -206,6 +209,17 @@ test_cases = [
         70,
     ),
     ClassifierTestCase("ShrubsClassifier", partial(ShrubsClassifier), 89.6, 91),
+    ClassifierTestCase(
+        "Finetune",
+        partial(
+            Finetune,
+            model=Perceptron,
+            optimizer=partial(torch.optim.Adam, lr=0.001),
+        ),
+        60.4,
+        66.0,
+        batch_size=32,
+    ),
 ]
 
 
@@ -263,24 +277,14 @@ def test_classifiers(test_case: ClassifierTestCase, subtests: SubTests):
     * Does the CLI string match the expected value?
     """
     stream = ElectricityTiny()
-    evaluator = ClassificationEvaluator(schema=stream.get_schema())
-    win_evaluator = ClassificationWindowedEvaluator(
-        schema=stream.get_schema(), window_size=100
-    )
     learner: Classifier = test_case.learner_constructor(schema=stream.get_schema())
-
-    for instance in stream:
-        prediction = learner.predict(instance)
-        evaluator.update(instance.y_index, prediction)
-        win_evaluator.update(instance.y_index, prediction)
-        learner.train(instance)
+    results = prequential_evaluation(
+        stream, learner, window_size=100, batch_size=test_case.batch_size
+    )
 
     # Check if the accuracy matches the expected value for both evaluator types
-    actual_acc = evaluator.accuracy()
-    actual_win_acc = win_evaluator.accuracy()[-1]
-
-    print(f"{actual_acc}")
-    print(f"{actual_win_acc}")
+    actual_acc = results.cumulative.accuracy()
+    actual_win_acc = results.windowed.accuracy()[-1]
 
     assert actual_acc == pytest.approx(test_case.accuracy, abs=0.1), (
         f"Basic Eval: Expected accuracy of {test_case.accuracy:0.1f} got {actual_acc: 0.1f}"

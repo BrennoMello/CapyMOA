@@ -21,6 +21,7 @@ from ._csmote import CSMOTE
 from ._weightedknn import WeightedkNN
 from ._shrubs_classifier import ShrubsClassifier
 from ._cd_classifier import ConceptDriftMethodClassifier, LSD
+from ._finetune import Finetune
 
 __all__ = [
     "AdaptiveRandomForestClassifier",
@@ -47,4 +48,5 @@ __all__ = [
     "ShrubsClassifier",
     "ConceptDriftMethodClassifier",
     "LSD",
+    "Finetune",
 ]

@@ -18,6 +18,7 @@ from .cd_evaluation import (
     prequential_cd_delay_partially_evaluation,
     ConceptDriftDetectorEvaluator,
 )
+from . import results
 
 __all__ = [
     "prequential_evaluation",

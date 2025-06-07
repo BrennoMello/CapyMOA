@@ -56,8 +56,23 @@ nitpick_ignore_regex = [
 toc_object_entries_show_parents = "hide"
 autosummary_ignore_module_all = False
 autosummary_generate = True
+autosummary_context = {
+    # List of modules that we do not include inherited members in. This is
+    # usually because they import from torch.nn.Module or similar large
+    # classes.
+    "inherited_members_module_denylist": ["capymoa.ann"]
+}
+
 autodoc_member_order = "groupwise"
 autodoc_class_signature = "separated"
+
+# Suppress the leading module names of the typehints in the documentation.
+# This is useful to abbreviate the typehints in the documentation.
+autodoc_typehints_format = "short"
+
+# The default argument values of functions will be not evaluated on generating
+# document. It preserves them as is in the source code.
+autodoc_preserve_defaults = True
 
 templates_path = ["_templates"]
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
@@ -85,6 +100,7 @@ rst_epilog = f"""
 
 html_theme = "pydata_sphinx_theme"
 html_static_path = ["_static"]
+html_css_files = ["css/citation.css"]
 
 # Setup symbolic links for notebooks
 
@@ -101,6 +117,7 @@ if not notebook_doc_source.exists():
 
 intersphinx_mapping = {
     "sklearn": ("https://scikit-learn.org/stable/", None),
+    "torch": ("https://pytorch.org/docs/stable/", None),
 }
 
 """ Options for linkcode extension ------------------------------------------
