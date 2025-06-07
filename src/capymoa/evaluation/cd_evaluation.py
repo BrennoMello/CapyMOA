@@ -131,7 +131,7 @@ class DelayBuffer():
         self.delay_buffer = deque()
          
     def add(self, instace, timestamp, delay, label_available):
-        self.delay_buffer.append((instace, timestamp+delay, label_available))
+        self.delay_buffer.append((instace, timestamp+delay, timestamp, label_available))
         #TODO: Use heapsort to sort the buffer
         self.delay_buffer = deque(sorted(self.delay_buffer, key=lambda x: x[1]))
 
@@ -147,7 +147,7 @@ class DelayBuffer():
         return instance_tuples
         
 
-def prequential_cd_partially_evaluation(
+def prequential_cd_delay_evaluation(
     stream: Stream,
     learner: Union[ClassifierSSL, Classifier],
     max_instances: Optional[int] = None,
@@ -164,7 +164,7 @@ def prequential_cd_partially_evaluation(
     cd_ground_truth_list: Optional[int] = None,
     cd_evaluator: Optional[ConceptDriftDetectorEvaluator] = None,
 ):
-    """Run and evaluate a concept drift detector on a partially or delay stream using prequential evaluation.
+    """Run and evaluate a concept drift detector on a delay stream using prequential evaluation.
 
     :param stream: A data stream to evaluate the learner on. Will be restarted if
         ``restart_stream`` is True.
@@ -463,7 +463,7 @@ def prequential_cd_delay_partially_evaluation(
     partially_counter = 0
     labeled_counter = 0
     for i, instance in enumerate(stream):
-        print(f"Instances Processed {i}")
+        print(f"INSTANCES PROCESSED {i}")
 
         # prediction = learner.predict(instance)
 
@@ -484,6 +484,7 @@ def prequential_cd_delay_partially_evaluation(
             delay = rand.uniform(min_delay, max_delay)
             delay_buffer.add(instance, i, round(delay), True)
             delay_counter += 1
+            
         elif rand.random(dtype=np.float64) >= label_probability:
             #Instance unlabeled
             #TODO: case when the instance is delayed and unlabeled
@@ -494,9 +495,10 @@ def prequential_cd_delay_partially_evaluation(
             delay_buffer.add(instance, i, 0, True)
             labeled_counter += 1
 
+        print(f"Delay amount {delay_counter}")
         if i > initial_window_size:
             instances_current = delay_buffer.sample(i)
-            for instance, delay, label_available in instances_current:
+            for instance, delay, timestamp, label_available in instances_current:
                 prediction = learner.predict(instance)
 
                 if stream.get_schema().is_classification():
@@ -512,7 +514,7 @@ def prequential_cd_delay_partially_evaluation(
                 if isinstance(learner, ClassifierSSL):
                     learner.train_on_unlabeled(instance)
                 elif label_available == True:    
-                    learner.train(instance, delay) 
+                    learner.train(instance, delay-timestamp) 
                 
         # TODO: Is it correct?
         cd_ground_truth = 0

@@ -11,6 +11,7 @@ import numpy as np
 from tqdm.auto import tqdm
 
 from dataclasses import dataclass
+from collections import deque
 
 
 @dataclass(frozen=True)
@@ -310,12 +311,14 @@ def ocl_train_eval_loop(
         if isinstance(learner, TaskBoundaryAware):
             learner.set_train_task(train_task_id)
 
+
         # Train and evaluation loop for a single task
         for step, instance in enumerate(train_stream):
             # Update the learner and collect prequential statistics
             pbar.update(1)
             y_pred = learner.predict(instance)
             metrics.prequential_update(train_task_id, instance.y_index, y_pred)
+
             learner.train(instance)
 
             # Evaluate the learner on evenly spaced steps during training
@@ -339,3 +342,93 @@ def ocl_train_eval_loop(
                     )
 
     return metrics.build()
+
+def ocl_delay_train_eval_loop(
+    learner: _OCLClassifier,
+    train_streams: Sequence[Stream[LabeledInstance]],
+    test_streams: Sequence[Stream[LabeledInstance]],
+    continual_evaluations: int = 1,
+    delay: int = 0,
+    window_init_size: Optional[int] = None,
+    progress_bar: bool = False,
+) -> OCLMetrics:
+    """Train and evaluate a learner on a sequence of tasks.
+
+    :param learner: A classifier that is possibly task-aware or
+        task-boundary-aware.
+    :param train_streams: A sequence of streams containing the training tasks.
+    :param test_streams: A sequence of streams containing the testing tasks.
+    :param continual_evaluations: The number of times to evaluate the learner
+        during each task. If 1, the learner is only evaluated at the end of each task.
+    :param progress_bar: Whether to display a progress bar. The bar displayed
+        will show the progress over all training and evaluation steps including
+        the continual evaluations.
+    :return: A collection of metrics evaluating the learner's performance.
+    """
+    n_tasks = len(train_streams)
+    if n_tasks != len(test_streams):
+        raise ValueError("Number of train and test tasks must be equal")
+    if not isinstance(learner, Classifier):
+        raise ValueError("Learner must be a classifier")
+    if continual_evaluations < 1:
+        raise ValueError("Continual evaluations must be at least 1")
+
+    metrics = _OCLEvaluator(
+        n_tasks, continual_evaluations, learner.schema.get_num_classes()
+    )
+
+    # Setup progress bar
+    train_len = sum(len(stream) for stream in train_streams)
+    test_len = sum(len(stream) for stream in test_streams)
+    pbar = tqdm(
+        total=train_len + test_len * continual_evaluations * n_tasks,
+        disable=not progress_bar,
+        desc="Train & Eval",
+    )
+    train_instances = deque()
+    # Iterate over each task
+    for train_task_id, train_stream in enumerate(train_streams):
+        # Setup stream and inform learner of the test task
+        train_stream.restart()
+        if isinstance(learner, TaskBoundaryAware):
+            learner.set_train_task(train_task_id)
+
+        step = -1
+        while train_stream.has_more_instances():
+        # Train and evaluation loop for a single task
+        # for step, instance in enumerate(train_stream):
+            # Update the learner and collect prequential statistics
+            step += 1
+            pbar.update(1)
+            instance = train_stream.next_instance()
+            y_pred = learner.predict(instance)
+            metrics.prequential_update(train_task_id, instance.y_index, y_pred)
+            train_instances.append(instance)
+            if window_init_size is not None and step < window_init_size:
+                learner.train(train_instances.popleft())
+            elif len(train_instances) > delay:
+                # Train the learner on the instance
+                learner.train(train_instances.popleft())
+
+            # Evaluate the learner on evenly spaced steps during training
+            evaluate_every = len(train_stream) // continual_evaluations
+            if (step + 1) % evaluate_every != 0:
+                continue
+            eval_step = step // evaluate_every
+
+            for test_task_id, test_stream in enumerate(test_streams):
+                # Setup stream and inform learner of the test task
+                test_stream.restart()
+                if isinstance(learner, TaskAware):
+                    learner.set_test_task(test_task_id)
+
+                # predict instances in the current task
+                for instance in test_stream:
+                    pbar.update(1)
+                    y_pred = learner.predict(instance)
+                    metrics.holdout_update(
+                        train_task_id, eval_step, test_task_id, instance.y_index, y_pred
+                    )
+
+    return metrics.build()
+

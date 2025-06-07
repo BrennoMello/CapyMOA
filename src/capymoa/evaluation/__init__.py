@@ -14,7 +14,7 @@ from .evaluation import (
 )
 from . import results, ocl
 from .cd_evaluation import (
-    prequential_cd_partially_evaluation,
+    prequential_cd_delay_evaluation,
     prequential_cd_delay_partially_evaluation,
     ConceptDriftDetectorEvaluator,
 )
@@ -34,7 +34,7 @@ __all__ = [
     "ClusteringEvaluator",
     "results",
     "ocl",
-    "prequential_cd_partially_evaluation",
+    "prequential_cd_delay_evaluation",
     "prequential_cd_delay_partially_evaluation",
     "ConceptDriftDetectorEvaluator",
 ]

@@ -13,8 +13,8 @@ class ConceptDriftMethodClassifier(Classifier):
         self, 
         schema=None, 
         random_seed=1, 
-        moa_drift_detector=None, 
-        moa_learner=None,
+        drift_detector=None, 
+        learner=None,
         loss=None,
     ):
         self.DDM_INCONTROL_LEVEL = 0
@@ -36,13 +36,13 @@ class ConceptDriftMethodClassifier(Classifier):
         self.random_seed = random_seed
         self.schema = schema
 
-        self.moa_learner = moa_learner
-        self.moa_drift_detector = moa_drift_detector
+        self.learner = learner
+        self.drift_detector = drift_detector
 
-        self.classifier = moa_learner
-        self.new_classifier = copy.deepcopy(self.moa_learner)
+        self.classifier = learner
+        self.new_classifier = copy.deepcopy(self.learner)
         
-        self.drift_detection_method = self.moa_drift_detector
+        self.drift_detection_method = self.drift_detector
 
         # self.classifier.setRandomSeed(self.random_seed)
         
@@ -59,17 +59,25 @@ class ConceptDriftMethodClassifier(Classifier):
 
         predict_class = self.classifier.predict(instance)
         predict_proba = self.classifier.predict_proba(instance)
+        print(f"true_class: {true_class}")
+        print(f"predict_class: {predict_class}")
         print(f"predict_proba: {predict_proba}")
-        if predict_class == true_class:
-            prediction = True
-        else:
-            prediction = False
-        
-        #TODO: Change the loss function 
-        # self.drift_detection_method.input(0.0 if prediction else 1.0)
-        
-        loss_value = self.loss_function.input(true_class, predict_proba, delay)
-        self.drift_detection_method.add_element(loss_value)
+
+        if predict_proba is not None:
+            
+            if predict_class == true_class:
+                prediction = True
+            else:
+                prediction = False
+            
+            #TODO: Change the loss function 
+            # self.drift_detection_method.input(0.0 if prediction else 1.0) 
+            classes_num = self.get_classes(int(true_class))
+            loss_value = self.loss_function.input(classes_num, predict_proba, delay)
+            print(f"Delay instance: {delay}")
+            print(f"loss_value: {loss_value}")
+            self.drift_detection_method.add_element(loss_value)
+
         self.ddmLevel = self.DDM_INCONTROL_LEVEL
 
         if self.drift_detection_method.detected_change():
@@ -98,7 +106,7 @@ class ConceptDriftMethodClassifier(Classifier):
             # if isinstance(self.classifier, WEKAClassifier):
             #     self.classifier.buildClassifier()
             # self.new_classifier = self.moa_learner_option().copy()
-            self.new_classifier = copy.deepcopy(self.moa_learner)
+            self.new_classifier = copy.deepcopy(self.learner)
             self.new_classifier.reset()
             
 
@@ -108,6 +116,11 @@ class ConceptDriftMethodClassifier(Classifier):
             
         self.classifier.train(instance)
 
+    def get_classes(self, y_true):
+        classes = np.zeros(self.schema.get_num_classes())
+        classes[y_true] = 1.0
+        return classes
+    
     def __str__(self):
         return str("ConceptDriftMethodClassifier")
 
@@ -139,10 +152,10 @@ class ConceptDriftMethodClassifier(Classifier):
     def get_cd_votes(self, instance):
         return self.drift_detection_method.get_votes()
 
-    def resetLearning(self):
+    def reset(self):
         # self.classifier = copy.deepcopy(self.moa_learner)
-        self.classifier = self.moa_learner.copy()
-        self.new_classifier = self.moa_learner.copy()
+        self.classifier = self.learner.copy()
+        self.new_classifier = self.learner.copy()
         self.classifier.reset()
         self.new_classifier.reset()
         # self.driftDetectionMethod = self.moa_drift_detection.copy()
@@ -157,14 +170,21 @@ class LSD():
        return self._penalize_loss(true_label=true_class, predicted_probs=predict_proba, delay=delay)
 
     def _categorical_cross_entropy(self, y_true, y_pred):
+        
+        
         # Avoid log(0) by adding a small epsilon value
         epsilon = 1e-15
         y_pred = np.clip(y_pred, epsilon, 1 - epsilon)
-    
+
+        print(f"y_pred: {y_pred}")
+        print(f"y_true: {y_true}")
+        print(f"log10: {np.log10(y_pred)}")
+
         # Compute the loss (sum over all classes for each instance)
         loss = -np.sum(y_true * np.log10(y_pred))
         return loss
 
     def _penalize_loss(self, true_label, predicted_probs, delay, k=0.1):
         loss = self._categorical_cross_entropy(true_label, predicted_probs)
+        print(f"Categorical cross entropy loss: {loss}")
         return loss + (1 - loss) * (1 - math.exp(-k * delay))

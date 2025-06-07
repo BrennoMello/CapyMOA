@@ -5,7 +5,9 @@ from capymoa.evaluation import (
 from capymoa.classifier import (
     ConceptDriftMethodClassifier, 
     HoeffdingTree,
+    OnlineBagging,
     NaiveBayes,
+    SGDClassifier,
     LSD,
 )
 from capymoa.stream.drift import (
@@ -15,7 +17,11 @@ from capymoa.stream.drift import (
 from capymoa.drift.detectors import (
     ADWIN
 )
+import numpy as np
+from sklearn import linear_model
+from capymoa.datasets import Electricity
 from capymoa.stream.generator import AgrawalGenerator
+
 
 def run_cd_delay_partially():
     print("START CD EVALUATION DELAY PARTIALLY DATA STREAM")
@@ -34,17 +40,27 @@ def run_cd_delay_partially():
     )
 
     ht_classifier = HoeffdingTree(schema=stream_sea2drift.get_schema())
-    naive_bayes_classifier = NaiveBayes(
-        schema=stream_sea2drift.get_schema()
-    )
-    # sklearn_SGD = SKClassifier(
-    #     schema=stream_sea2drift.get_schema(), sklearner=linear_model.SGDClassifier()
+    # naive_bayes_classifier = NaiveBayes(
+    #     schema=stream_sea2drift.get_schema()
+    # )
+
+    # elec_stream = Electricity()
+    # ob_learner = OnlineBagging(schema=stream_sea2drift.get_schema(), ensemble_size=5)
+    # for instance in elec_stream:
+
+    #     ob_learner.train(instance)
+    #     predict_proba = ob_learner.moa_learner.getVotesForInstance(instance.java_instance)
+       
+    #     print(f"predict_proba: {np.array(predict_proba, dtype=float)}")
+
+    # sklearn_classifier = SGDClassifier(
+    #     schema=stream_sea2drift.get_schema()
     # )
     cd_evaluator = ConceptDriftDetectorEvaluator()
     cd_classifier = ConceptDriftMethodClassifier(
         schema=stream_sea2drift.get_schema(),
-        moa_drift_detector=ADWIN(),
-        moa_learner=naive_bayes_classifier,
+        drift_detector=ADWIN(),
+        learner=ht_classifier,
         loss=LSD,
     )
     # results = prequential_cd_delay_partially_evaluation(

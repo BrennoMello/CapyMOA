@@ -1,0 +1,11 @@
+INSTANCES PROCESSED 9999
+Delay amount 4974
+true_class: 1.0
+predict_class: 0
+predict_proba: [9.99995460e-01 4.54011748e-06]
+y_pred: [9.99995460e-01 4.54011748e-06]
+y_true: [0. 1.]
+log10: [-1.97175244e-06 -5.34293291e+00]
+Categorical cross entropy loss: 5.342932909476136
+Delay instance: 14
+loss_value: 2.0709540700789026

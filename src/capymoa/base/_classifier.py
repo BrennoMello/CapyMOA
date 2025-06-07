@@ -201,8 +201,32 @@ class MOAClassifier(Classifier):
             self.moa_learner.getVotesForInstance(instance.java_instance)
         )
 
+    # def predict_proba(self, instance):
+    #     return self.moa_learner.getVotesForInstance(instance.java_instance)
+
     def predict_proba(self, instance):
-        return self.moa_learner.getVotesForInstance(instance.java_instance)
+        raw_votes = self.moa_learner.getVotesForInstance(instance.java_instance)
+
+        # votes are empty, return all NaNs
+        if not raw_votes:
+            # return np.full(self.schema.get_num_classes(), np.nan)
+            return None
+        
+        votes = np.array(raw_votes, dtype=float)
+
+        # If less than the number of classes is returned
+        if votes.size < self.schema.get_num_classes():
+            pred = self.predict(instance)
+            proba = np.zeros(self.schema.get_num_classes())
+            proba[pred] = 1.0
+            return proba
+
+        total = votes.sum()
+        if total == 0:
+            # return np.full(self.schema.get_num_classes(), np.nan)
+            return None
+
+        return votes/total
 
     def reset(self):
         """Reset the learning process of the MOA classifier."""
