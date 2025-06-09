@@ -12,7 +12,7 @@ from .evaluation import (
     AnomalyDetectionEvaluator,
     ClusteringEvaluator,
 )
-from . import results, ocl
+
 from .cd_evaluation import (
     prequential_cd_delay_evaluation,
     prequential_cd_delay_partially_evaluation,

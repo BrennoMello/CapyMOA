@@ -1,6 +1,7 @@
 """Evaluate online continual learning in classification tasks."""
 
 from dataclasses import dataclass
+from collections import deque
 from typing import Optional, Sequence, Tuple, Union
 
 import numpy as np
@@ -285,6 +286,12 @@ class _OCLEvaluator:
 
 _OCLClassifier = Union[TaskBoundaryAware, TaskAware, Classifier]
 
+def _test(learner: Classifier, x: Tensor) -> np.ndarray:
+    batch_size = x.shape[0]
+    x = x.view(batch_size, -1)
+    y_proba = learner.batch_predict_proba(x.numpy())
+    
+    return np.argmax(y_proba, axis=1)
 
 def _batch_test(learner: Classifier, x: Tensor) -> np.ndarray:
     """Test a batch of instances using the learner."""
@@ -414,6 +421,171 @@ def ocl_train_eval_loop(
 
             boundary_instances[train_task_id + 1] = online_eval.instances_seen
 
+    # TODO: We should measure time spent in ``learner.train`` separately from
+    # time spent in evaluation.
+    elapsed_wallclock_time, elapsed_cpu_time = stop_time_measuring(
+        start_wallclock_time, start_cpu_time
+    )
+    return metrics.build(
+        PrequentialResults(
+            learner=str(learner),
+            stream=f"{train_streams[0]}x{len(train_streams)}",
+            cumulative_evaluator=online_eval,
+            windowed_evaluator=windowed_eval,
+            wallclock=elapsed_wallclock_time,
+            cpu_time=elapsed_cpu_time,
+        ),
+        boundary_instances,
+    )
+
+class _DelayBuffer():
+
+    def __init__(self):
+        self.delay_buffer = deque()
+         
+    def add(self, instace, timestamp, delay, label_available):
+        self.delay_buffer.append((instace, timestamp+delay, timestamp, label_available))
+        #TODO: Use heapsort to sort the buffer
+        self.delay_buffer = deque(sorted(self.delay_buffer, key=lambda x: x[1]))
+
+    def sample(self, timestamp):
+        #(instance, timestamp, label_available)
+        #[(x_1, 3, True), (x_2, 5, True), (x_3, 11, False)]
+        instance_tuples = list()
+        for instance in list(self.delay_buffer):
+            if instance[1] <= timestamp:
+                instance_tuples.append(instance)
+                self.delay_buffer.popleft()  
+
+        return instance_tuples
+
+def ocl_delay_train_eval_loop(
+    learner: _OCLClassifier,
+    train_streams: Sequence[DataLoader[Tuple[Tensor, Tensor]]],
+    test_streams: Sequence[DataLoader[Tuple[Tensor, Tensor]]],
+    continual_evaluations: int = 1,
+    progress_bar: bool = False,
+    eval_window_size: int = 1000,
+    delay: int = 0,
+    delay_probability: float = 0.8,
+    min_delay: int = 50,
+    max_delay: int = 500,
+    window_init_size: Optional[int] = 10,
+) -> OCLMetrics:
+    """Train and evaluate a learner on a sequence of tasks.
+
+    :param learner: A classifier that is possibly task-aware or
+        task-boundary-aware.
+    :param train_streams: A sequence of streams containing the training tasks.
+    :param test_streams: A sequence of streams containing the testing tasks.
+    :param continual_evaluations: The number of times to evaluate the learner
+        during each task. If 1, the learner is only evaluated at the end of each task.
+    :param progress_bar: Whether to display a progress bar. The bar displayed
+        will show the progress over all training and evaluation steps including
+        the continual evaluations.
+    :return: A collection of metrics evaluating the learner's performance.
+    """
+    n_tasks = len(train_streams)
+    if n_tasks != len(test_streams):
+        raise ValueError("Number of train and test tasks must be equal")
+    if not isinstance(learner, Classifier):
+        raise ValueError("Learner must be a classifier")
+    if 1 > continual_evaluations:
+        raise ValueError("Continual evaluations must be at least 1")
+    if (min_stream_len := min(len(s) for s in train_streams)) < continual_evaluations:
+        raise ValueError(
+            "Cannot evaluate more times than the number of batches. "
+            f"(min stream length (in batches): {min_stream_len}, "
+            f"continual evaluations: {continual_evaluations})"
+        )
+
+    metrics = _OCLEvaluator(
+        n_tasks, continual_evaluations, learner.schema.get_num_classes()
+    )
+    online_eval = ClassificationEvaluator(schema=learner.schema)
+    windowed_eval = ClassificationWindowedEvaluator(
+        schema=learner.schema, window_size=eval_window_size
+    )
+    boundary_instances = torch.zeros(len(train_streams) + 1)
+    start_wallclock_time, start_cpu_time = start_time_measuring()
+
+    # Setup progress bar
+    train_len = sum(len(stream) for stream in train_streams)
+    test_len = sum(len(stream) for stream in test_streams)
+    pbar = tqdm(
+        total=train_len + test_len * continual_evaluations * n_tasks,
+        disable=not progress_bar,
+        desc="Train & Eval",
+    )
+
+    # Initialize the delay buffer
+    delay_buffer = _DelayBuffer()
+    timestamp = 0
+    # Iterate over each task
+    for train_task_id, train_stream in enumerate(train_streams):
+        # Setup stream and inform learner of the test task
+        if isinstance(learner, TaskBoundaryAware):
+            learner.set_train_task(train_task_id)
+
+        # Train and evaluation loop for a single task
+        for step, (xb, yb) in enumerate(train_stream):
+            # Update the learner and collect prequential statistics
+            xb: Tensor
+            yb: Tensor
+            pbar.update(1)              
+            # yb_pred = _batch_test(learner, xb)
+            # _batch_train(learner, xb, yb)
+            
+            for i, (xb_i, yb_i) in enumerate(zip(xb, yb, strict=True)):
+                timestamp += 1
+                
+                xb_i_reshape = xb_i.unsqueeze(0)
+                y_pred = _test(learner, xb_i_reshape)
+
+                online_eval.update(yb_i.item(), y_pred[0])
+                windowed_eval.update(yb_i.item(), y_pred[0])
+                
+                if timestamp <= window_init_size:
+                    _batch_train(learner, xb_i.unsqueeze(0), yb_i.unsqueeze(0))
+                elif torch.rand(1) >= delay_probability:
+                    delay_torch = torch.randint(min_delay, max_delay, (1,)).item()
+                    delay_buffer.add((xb_i, yb_i), timestamp, delay_torch, True)               
+                else:
+                    delay_buffer.add((xb_i, yb_i), timestamp, delay, True)
+
+                if timestamp > window_init_size:
+                    sampled_instances = delay_buffer.sample(timestamp)
+                    for (xb_i, yb_i), sampled_delay, _, sampled_label_available in sampled_instances:
+                        if sampled_label_available:
+                            _batch_train(learner, xb_i.unsqueeze(0), yb_i.unsqueeze(0))
+                            
+            # Evaluate the learner on evenly spaced steps during training
+            evaluate_every = len(train_stream) // continual_evaluations
+            if (step + 1) % evaluate_every == 0:
+                eval_step = step // evaluate_every
+
+                for test_task_id, test_stream in enumerate(test_streams):
+                    # Setup stream and inform learner of the test task
+                    if isinstance(learner, TaskAware):
+                        learner.set_test_task(test_task_id)
+
+                    # predict instances in the current task
+                    for test_xb, test_yb in test_stream:
+                        pbar.update(1)
+                        yb_pred = _batch_test(learner, test_xb)
+
+                        for y, y_pred in zip(test_yb, yb_pred):
+                            metrics.holdout_update(
+                                train_task_id,
+                                eval_step,
+                                test_task_id,
+                                y.item(),
+                                y_pred,
+                            )
+
+            boundary_instances[train_task_id + 1] = online_eval.instances_seen
+            
+    # TODO: Residual instances in the delay buffer, what to do with them?
     # TODO: We should measure time spent in ``learner.train`` separately from
     # time spent in evaluation.
     elapsed_wallclock_time, elapsed_cpu_time = stop_time_measuring(
