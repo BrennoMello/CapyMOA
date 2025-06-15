@@ -20,6 +20,7 @@ from capymoa.evaluation.evaluation import (
 from capymoa.evaluation.results import PrequentialResults
 from capymoa.instance import Instance, LabeledInstance
 from capymoa.ocl.base import TaskAware, TaskBoundaryAware
+from capymoa.ocl.strategy import ExperienceDelayReplay
 from capymoa.type_alias import LabelIndex
 
 
@@ -291,7 +292,16 @@ def _test(learner: Classifier, x: Tensor) -> np.ndarray:
     x = x.view(batch_size, -1)
     y_proba = learner.batch_predict_proba(x.numpy())
     
-    return np.argmax(y_proba, axis=1)
+    return np.argmax(y_proba, axis=1), y_proba
+
+def _train(learner: Classifier, instance):
+    x = instance[0][0]
+    y = instance[0][1]
+    batch_size = x.shape[0]
+    x = x.view(batch_size, -1)
+    if isinstance(learner, BatchClassifier):
+        learner.batch_train(x.numpy(), y.numpy(), instance)
+    
 
 def _batch_test(learner: Classifier, x: Tensor) -> np.ndarray:
     """Test a batch of instances using the learner."""
@@ -443,8 +453,8 @@ class _DelayBuffer():
     def __init__(self):
         self.delay_buffer = deque()
          
-    def add(self, instace, timestamp, delay, label_available):
-        self.delay_buffer.append((instace, timestamp+delay, timestamp, label_available))
+    def add(self, instace, timestamp, delay, label_available, y_proba):
+        self.delay_buffer.append((instace, timestamp+delay, timestamp, label_available, y_proba))
         #TODO: Use heapsort to sort the buffer
         self.delay_buffer = deque(sorted(self.delay_buffer, key=lambda x: x[1]))
 
@@ -468,9 +478,9 @@ def ocl_delay_train_eval_loop(
     eval_window_size: int = 1000,
     delay: int = 0,
     delay_probability: float = 0.8,
-    min_delay: int = 50,
-    max_delay: int = 500,
-    window_init_size: Optional[int] = 10,
+    min_delay: int = 1000,
+    max_delay: int = 2000,
+    window_init_size: Optional[int] = 0,
 ) -> OCLMetrics:
     """Train and evaluate a learner on a sequence of tasks.
 
@@ -520,6 +530,7 @@ def ocl_delay_train_eval_loop(
 
     # Initialize the delay buffer
     delay_buffer = _DelayBuffer()
+    buffer_batch_instances = list()
     timestamp = 0
     # Iterate over each task
     for train_task_id, train_stream in enumerate(train_streams):
@@ -528,6 +539,7 @@ def ocl_delay_train_eval_loop(
             learner.set_train_task(train_task_id)
 
         # Train and evaluation loop for a single task
+        
         for step, (xb, yb) in enumerate(train_stream):
             # Update the learner and collect prequential statistics
             xb: Tensor
@@ -536,12 +548,15 @@ def ocl_delay_train_eval_loop(
             # yb_pred = _batch_test(learner, xb)
             # _batch_train(learner, xb, yb)
             
+            batch_size = xb.shape[0]
+            # TODO: Residual instances in the delay buffer, what to do with them?
             for i, (xb_i, yb_i) in enumerate(zip(xb, yb, strict=True)):
                 timestamp += 1
                 
                 xb_i_reshape = xb_i.unsqueeze(0)
-                y_pred = _test(learner, xb_i_reshape)
+                y_pred, y_proba = _test(learner, xb_i_reshape)
 
+                # TODO: Is ths correct?
                 online_eval.update(yb_i.item(), y_pred[0])
                 windowed_eval.update(yb_i.item(), y_pred[0])
                 
@@ -549,16 +564,29 @@ def ocl_delay_train_eval_loop(
                     _batch_train(learner, xb_i.unsqueeze(0), yb_i.unsqueeze(0))
                 elif torch.rand(1) >= delay_probability:
                     delay_torch = torch.randint(min_delay, max_delay, (1,)).item()
-                    delay_buffer.add((xb_i, yb_i), timestamp, delay_torch, True)               
+                    delay_buffer.add((xb_i, yb_i), timestamp, delay_torch, True, y_proba)               
                 else:
-                    delay_buffer.add((xb_i, yb_i), timestamp, delay, True)
+                    delay_buffer.add((xb_i, yb_i), timestamp, delay, True, y_proba)
 
                 if timestamp > window_init_size:
                     sampled_instances = delay_buffer.sample(timestamp)
-                    for (xb_i, yb_i), sampled_delay, _, sampled_label_available in sampled_instances:
-                        if sampled_label_available:
-                            _batch_train(learner, xb_i.unsqueeze(0), yb_i.unsqueeze(0))
-                            
+                    #for (xb_i, yb_i), sampled_delay, _, sampled_label_available in sampled_instances:
+                    buffer_batch_instances.extend(sampled for sampled in sampled_instances)
+                    if len(buffer_batch_instances) >= batch_size:
+                        if isinstance(learner, ExperienceDelayReplay):
+                            learner.batch_train(buffer_batch_instances)
+                            buffer_batch_instances = list()                    
+                        else:
+                            xb = torch.stack([inst[0][0] for inst in buffer_batch_instances])
+                            yb = torch.tensor([inst[0][1] for inst in buffer_batch_instances], dtype=torch.int64)
+                            _batch_train(learner, xb, yb)     
+                        
+                    # for sampled in sampled_instances:
+                    #     #if sampled_label_available:
+                    #     if sampled[3]:
+                    #         _batch_train(learner, xb_i.unsqueeze(0), yb_i.unsqueeze(0))
+                    #         # _train(learner, sampled)
+
             # Evaluate the learner on evenly spaced steps during training
             evaluate_every = len(train_stream) // continual_evaluations
             if (step + 1) % evaluate_every == 0:
@@ -585,7 +613,7 @@ def ocl_delay_train_eval_loop(
 
             boundary_instances[train_task_id + 1] = online_eval.instances_seen
             
-    # TODO: Residual instances in the delay buffer, what to do with them?
+    
     # TODO: We should measure time spent in ``learner.train`` separately from
     # time spent in evaluation.
     elapsed_wallclock_time, elapsed_cpu_time = stop_time_measuring(
