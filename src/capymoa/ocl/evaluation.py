@@ -557,8 +557,8 @@ def ocl_delay_train_eval_loop(
                 y_pred, y_proba = _test(learner, xb_i_reshape)
 
                 # TODO: Is ths correct?
-                online_eval.update(yb_i.item(), y_pred[0])
-                windowed_eval.update(yb_i.item(), y_pred[0])
+                # online_eval.update(yb_i.item(), y_pred[0])
+                # windowed_eval.update(yb_i.item(), y_pred[0])
                 
                 if timestamp <= window_init_size:
                     _batch_train(learner, xb_i.unsqueeze(0), yb_i.unsqueeze(0))
@@ -573,14 +573,24 @@ def ocl_delay_train_eval_loop(
                     #for (xb_i, yb_i), sampled_delay, _, sampled_label_available in sampled_instances:
                     buffer_batch_instances.extend(sampled for sampled in sampled_instances)
                     if len(buffer_batch_instances) >= batch_size:
+                        # TODO: Is ths correct?
+                        # Test after delay
+                        for inst in buffer_batch_instances:
+                            x_buffer, y_buffer = inst[0][0], inst[0][1]
+                            x_buffer_reshape = x_buffer.unsqueeze(0)    
+                            y_buffer_pred, _ = _test(learner, x_buffer_reshape)
+                            online_eval.update(y_buffer.item(), y_buffer_pred[0])
+                            windowed_eval.update(y_buffer.item(), y_buffer_pred[0])
+                            
                         if isinstance(learner, ExperienceDelayReplay):
                             learner.batch_train(buffer_batch_instances)
-                            buffer_batch_instances = list()                    
                         else:
                             xb = torch.stack([inst[0][0] for inst in buffer_batch_instances])
                             yb = torch.tensor([inst[0][1] for inst in buffer_batch_instances], dtype=torch.int64)
                             _batch_train(learner, xb, yb)     
                         
+                        buffer_batch_instances = list()
+
                     # for sampled in sampled_instances:
                     #     #if sampled_label_available:
                     #     if sampled[3]:
