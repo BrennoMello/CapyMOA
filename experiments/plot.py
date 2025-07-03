@@ -89,7 +89,7 @@ def plot_multiple(
                 "-",
                 color=color,
                 label=f"{name} (online)",
-                alpha=0.2,
+                #alpha=0.2,
             )
 
     ax.legend(

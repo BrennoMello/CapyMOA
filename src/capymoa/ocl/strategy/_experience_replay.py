@@ -1,7 +1,6 @@
 from typing import Tuple
 import math
 
-from collections import deque
 from torch import Tensor
 import numpy as np
 import torch
@@ -75,7 +74,29 @@ class ExperienceReplay(BatchClassifier, TaskAware):
             rng=torch.Generator().manual_seed(learner.random_seed),
         )
 
-    def batch_train(self, x: np.ndarray, y: np.ndarray) -> None:
+    def batch_train(self, x: np.ndarray, y: np.ndarray, task_id, step) -> None:
+        # preprocess the data
+        x_: Tensor = torch.from_numpy(x)
+        y_: Tensor = torch.from_numpy(y).long()
+
+        # update the buffer with the new data
+        self._buffer.update(x_, y_)
+
+        # sample from the buffer and construct training batch
+        replay_x, replay_y = self._buffer.sample_n(x_.shape[0])
+        train_x = torch.cat((x_, replay_x), dim=0).to(self.learner.device)
+        train_y = torch.cat((y_, replay_y), dim=0).to(self.learner.device)
+
+        with open(f"debug/train_y_{task_id}_{step}.txt", "a") as f:
+            f.write(f"{train_y}\n")
+
+        return self.learner.torch_batch_train(train_x, train_y)
+
+    def batch_delay_train(self, x: np.ndarray, y: np.ndarray, batch_size: int) -> None:
+
+        # x_i = x[:batch_size]
+        # y_i = y[:batch_size]
+
         # preprocess the data
         x_: Tensor = torch.from_numpy(x)
         y_: Tensor = torch.from_numpy(y).long()
@@ -110,10 +131,7 @@ class _ReservoirDelaySampler:
     def __init__(self, item_count: int, feature_count: int, rng: torch.Generator):
         self.item_count = item_count
         self.feature_count = feature_count
-        # self.reservoir_x = torch.zeros((item_count, feature_count))
-        # self.reservoir_y = torch.zeros((item_count,), dtype=torch.long)
-        # self.importances = torch.zeros((item_count,))
-        self.reservoir_queue = deque()
+        self.reservoir_queue = list()
         self.rng = rng
         self.count = 0
     
@@ -129,15 +147,17 @@ class _ReservoirDelaySampler:
         
         return loss
 
+    #TODO: Test influence of k on the importance
     def instance_importance(self, true_label, predicted_probs, 
-                                delay, k=0.01):
-        # quando o erro for grande = 0.9
-        loss = 1 - self.categorical_crossentropy(true_label, predicted_probs)
+                                delay, k=0.0001):
+        # When the loss was bigger than 0.9
+        #loss = 1 - self.categorical_crossentropy(true_label, predicted_probs)
+        loss = self.categorical_crossentropy(true_label, predicted_probs)
         # loss 0.1 e delay 1000
         importance = self.penalize_imp(loss, delay, k)
 
         return importance
-
+    
     def update(self, x: Tensor, y: Tensor, true_label, predicted_probs, delay) -> None:
         batch_size = x.shape[0]
         assert x.shape == (
@@ -163,8 +183,9 @@ class _ReservoirDelaySampler:
             # if index < self.item_count:
             #     self.reservoir_x[index] = x[i]
             #     self.reservoir_y[index] = y[i]
-
-            instance_pop = self.reservoir_queue.pop(0)  # Remove the least important instance
+            
+            # Remove the least important instance
+            instance_pop = self.reservoir_queue.pop()  
             self.reservoir_queue.append((x, y, instance_importance))
 
         #TODO: Heap sort the queue based on importance
@@ -191,6 +212,11 @@ class _ReservoirDelaySampler:
         sampled_y = torch.tensor([item[1] for item in sampled_instances], dtype=torch.long)
         
         return sampled_x, sampled_y
+    
+    def get_buffer(self):
+        """Get the current state of the buffer."""
+        return self.reservoir_queue
+    
         
 class ExperienceDelayReplay(BatchClassifier, TaskAware):
     """Experience Replay (ER) strategy for continual learning.
@@ -220,8 +246,89 @@ class ExperienceDelayReplay(BatchClassifier, TaskAware):
             feature_count=self.schema.get_num_attributes(),
             rng=torch.Generator().manual_seed(learner.random_seed),
         )
+    
+    def penalize_imp(self, imp, delay, k=0.1):
+        return imp*(math.exp(-k * delay))
 
-    def batch_train(self, batch_instances) -> None:
+    def categorical_crossentropy(self, y_true, y_pred):
+        # Avoid log(0) by adding a small epsilon value
+        epsilon = 1e-15
+        y_pred = np.clip(y_pred, epsilon, 1 - epsilon)
+        
+        loss = -np.sum(y_true * np.log10(y_pred))
+        
+        return loss
+
+    #TODO: Test influence of k on the importance
+    def instance_importance(self, true_label, predicted_probs, 
+                                delay, k=0.1):
+        # When the loss was bigger than 0.9
+        #loss = 1 - self.categorical_crossentropy(true_label, predicted_probs)
+        loss = self.categorical_crossentropy(true_label, predicted_probs)
+        # loss 0.1 e delay 1000
+        importance = self.penalize_imp(loss, delay, k)
+
+        return importance
+
+
+    def batch_delay_train(self, tuple_instance: Tuple[Tuple[Tensor, Tensor], int, int, int, np.ndarray],
+                           task_id, step) -> None:
+
+        batch_size = tuple_instance[0][0][0].shape[0]
+        train_instances = list()
+        for instance in tuple_instance:
+
+            delay = instance[1] - instance[2]
+            x_ = instance[0][0]
+            y_ = instance[0][1]
+            if delay > 0:
+                # print(f"Instance delay: {delay}")              
+                for j in range(len(y_)):
+                    y = y_[j].item()
+
+                    # TODO: Generate one hot encoding for the true label
+                    num_classes = self.schema.get_num_classes()
+                    true_label_one_hot = np.eye(num_classes)[y]
+                    predicted_probs = instance[4][j]
+
+                    instance_importance = self.instance_importance(true_label_one_hot, predicted_probs, delay)
+                    # print(f"Instance importance: {instance_importance}")
+                    train_instances.append((x_[j], y, instance_importance))
+            else:
+                # print("No delay for instance, adding to training instances")
+                for j in range(len(y_)):
+                    y = y_[j].item()
+                    train_instances.append((x_[j], y, torch.iinfo(torch.int32).max))
+        
+        #sort the train instances by importance
+        train_instances = sorted(
+            train_instances,
+            key=lambda item: item[2],  # Sort by importance
+            reverse=True,  # Highest importance first
+        )
+
+        if len(train_instances) > batch_size*2:
+            # If the number of instances is greater than the batch size, we need to sample
+            # the instances based on their importance
+            train_instances = train_instances[:batch_size*2]
+        #     train_x = torch.stack([instance[0] for instance in train_instances])
+        #     train_y = torch.tensor([instance[1] for instance in train_instances], dtype=torch.long)
+        #     print("Sampled instances based on importance")
+        # else:
+        #     train_x = torch.stack([instance[0] for instance in train_instances])
+        #     train_y = torch.tensor([instance[1] for instance in train_instances], dtype=torch.long)
+        #     print("All instances are used for training")
+
+        train_x = torch.cat([instance[0] for instance in train_instances], dim=0).to(self.learner.device)
+        train_y = torch.tensor([instance[1] for instance in train_instances]).to(self.learner.device)
+        train_x = train_x.view(train_x.shape[0], -1)
+        
+        with open(f"debug/train_y_{task_id}_{step}.txt", "a") as f:
+            f.write(f"{train_y}\n")
+        
+        return self.learner.torch_batch_train(train_x, train_y)
+
+    def batch_train(self, batch_instances, task_id, step) -> None:
         
         batch_size = len(batch_instances)
         train_instances = list()
@@ -264,6 +371,12 @@ class ExperienceDelayReplay(BatchClassifier, TaskAware):
 
         # sample_size = batch_size - len(train_instances)
         replay_x, replay_y = self._buffer.sample_n(batch_size)
+        
+        # debug file with the buffer samples
+        buffer_state = self._buffer.get_buffer()
+        for item in buffer_state:
+            with open(f"debug/buffer_state_{task_id}_{step}.txt", "a") as f:
+                f.write(f"{item[1]}_{item[2]}\n")
 
         # sample from the buffer and construct training batch
         if replay_x is not None and replay_y is not None:
@@ -272,7 +385,10 @@ class ExperienceDelayReplay(BatchClassifier, TaskAware):
         else:
             train_x = x_.to(self.learner.device)
             train_y = y_.to(self.learner.device)
-                    
+
+        with open(f"debug/train_y_{task_id}_{step}.txt", "a") as f:
+            f.write(f"{train_y}\n")
+
         return self.learner.torch_batch_train(train_x, train_y)
 
     def batch_predict_proba(self, x: np.ndarray) -> np.ndarray:
