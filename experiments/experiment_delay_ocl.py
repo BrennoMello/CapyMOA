@@ -88,19 +88,6 @@ def run_experiment(config):
         )
     else:
         raise ValueError(f"Strategy {config['strategy']} not recognized.")
-    # return ocl_train_eval_delayed_loop(
-    #     learner_experience,
-    #     stream.train_loaders(batch_size=config["batch_size"]),
-    #     stream.test_loaders(batch_size=config["batch_size"]),
-    #     continual_evaluations=config["continual_evaluations"],
-    #     progress_bar=True,
-    #     eval_window_size=config["eval_window_size"],
-    #     delay_label=config["delay_label"],
-    #     select_tasks=config["select_tasks"],
-    #     no_delayed_tasks=config["no_delayed_tasks"],
-    #     start_delay_size=config["start_delay_size"],
-    #     number_delayed_batches=config["number_delayed_batches"],
-    # )
 
     return ocl_train_eval_mixed_delayed_loop(
         learner_experience,
@@ -146,80 +133,15 @@ def plot_online_accuracy(results, config):
     plots[0].savefig(f'plots/{folder_name}/results_plot_online_acc_{config["dataset"]}_{["EDR", "ER"]}_{config["acc_seen"]}_{config["no_delayed_tasks"]}_{config["batch_size"]}_{config["num_tasks"]}_{config["start_delay_size"]}_{config["delay_label"]}_{config["number_delayed_batches"]}.png',
                      dpi=300, bbox_inches="tight")
 
-#TODO: plot heatmap of task and batches correlation
-def plot_task_heatmaps(config):
-    if config["strategy"] == "EDR":
-        df = pd.read_csv("debug/train_batches_y_ExperienceDelayReplay.log", 
-                         names=["task_id", "class_0", "class_1", "class_2", "class_3", "class_4", "class_5", "class_6", 
-                                "class_7", "class_8", "class_9"])
-        df = df.drop(columns=["task_id"])
-        heatmap = px.imshow(df.corr(), text_auto=True, title=f'Correlation Heatmap - {config["dataset"]} - {config["strategy"]} - Delay Label: {config["delay_label"]}')
-        #create folder if not exists
-        folder_name = f'batch_size_{config["batch_size"]}_buffer_size_{config["buffer_size"]}_num_tasks_{config["num_tasks"]}_hidden_size_{config["hidden_size"]}_eval_window_size_{config["eval_window_size"]}_continual_evaluations_{config["continual_evaluations"]}_delay_label_{config["delay_label"]}_start_delay_size_{config["start_delay_size"]}_number_delayed_batches_{config["number_delayed_batches"]}'
-        os.makedirs(f"plots/{folder_name}", exist_ok=True)
-
-        heatmap.write_image(f'plots/{folder_name}/heatmap_{config["dataset"]}_{config["strategy"]}_{config["acc_seen"]}_{config["no_delayed_tasks"]}_{config["batch_size"]}_{config["num_tasks"]}_{config["start_delay_size"]}_{config["delay_label"]}_{config["number_delayed_batches"]}.png', 
-                            scale=3)
-        
-    # df = pd.read_csv("debug/train_batches_y_ExperienceDelayReplay.log", 
-    #              names=["task_id", "class_0", "class_1", "class_2", "class_3", "class_4", "class_5", "class_6", 
-    #                         "class_7", "class_8", "class_9"])
-
-def run_experiments():
-    config_repetitions = {
-        # "datasets": ["SplitCIFAR100"],
-        # "strategies": ["EDR", "ER_f", "ER_2B"],
-        "datasets": ["SplitMNIST", "SplitFashionMNIST", "SplitCIFAR10"],
-        "strategies": ["EDR", "RER", "ER_f", "ER_l", "ER_2B"],      
-    }
-    
-    config = {
-        "batch_size": 32,
-        "buffer_size": 128,
-        "num_tasks": 5,
-        "hidden_size": 64,
-        "eval_window_size": 128,
-        "continual_evaluations": 5,
-        "delay_label": 100,
-        "acc_seen": False,
-        "select_tasks": [],
-        "no_delayed_tasks": [],  
-        "start_delay_size": 0,
-        "number_delayed_batches": 1,
-        "prob_no_delay_batches": 0.4,
-    }
-
-    results: Dict[str, OCLMetrics] = {}
-    for dataset in config_repetitions["datasets"]:
-        clean_debug_files()
-        config["dataset"] = dataset
-        if dataset == "SplitCIFAR100":
-            config["num_tasks"] = 5
-            config["delay_label"] = 50
-
-        for strategy in config_repetitions["strategies"]:
-            set_seed(424242)
-            
-            config["strategy"] = strategy
-            results[strategy] = run_experiment(config)
-
-            plot_task_results(results[strategy], config)
-            #plot_task_heatmaps(config)
-
-        plot_online_accuracy(results, config)
 
 def run_random_experiments():
     
     config_repetitions = {
         "repetitions": 31,
-        # "no_delayed_batches": [0.1, 0.2, 0.3, 0.4],
-        "no_delayed_batches": [0.4],
-        # "delay_label": [10, 50, 80, 100],
-        "delay_label": [100],
-        # "datasets": ["SplitMNIST", "SplitFashionMNIST", "SplitCIFAR10"],
-        "datasets": ["SplitCIFAR10"],
-        # "strategies": ["EDR", "RER", "ER_f", "ER_l", "ER_2B"],   
-        "strategies": ["slda"],     
+        "no_delayed_batches": [0.1, 0.2, 0.3, 0.4],
+        "delay_label": [10, 50, 80, 100],
+        "datasets": ["SplitMNIST", "SplitFashionMNIST", "SplitCIFAR10"],
+        "strategies": ["EDR", "RER", "ER_f", "ER_l", "ER_2B"],        
     }
     
     config = {
@@ -295,5 +217,5 @@ def _save_json_results(
 
 if __name__ == "__main__":
     run_random_experiments()
-    # run_experiments()
+    
     
