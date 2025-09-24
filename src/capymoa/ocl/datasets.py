@@ -60,7 +60,9 @@ from torchvision.transforms import Compose, Normalize, ToTensor
 
 from capymoa.datasets import get_download_dir
 from capymoa.instance import LabeledInstance
-from capymoa.ocl.util.data import class_incremental_schedule, partition_by_schedule
+from capymoa.ocl.util.data import (
+        class_incremental_schedule, partition_by_schedule, task_free_class_incremental
+    )
 from capymoa.stream import Stream, TorchClassifyStream
 from capymoa.stream._stream import Schema
 
@@ -137,6 +139,7 @@ class _BuiltInCIScenario(ABC):
         normalize_features: bool = False,
         preload_test: bool = True,
         preload_train: bool = False,
+        task_option: Optional[str] = None,
     ):
         """Create a new online continual learning datamodule.
 
@@ -189,6 +192,7 @@ class _BuiltInCIScenario(ABC):
                 "Cannot normalize features since mean and std are not defined."
             )
         self.num_tasks = num_tasks
+        self.task_option = task_option
 
         # Set the number of tasks
         generator = torch.Generator().manual_seed(seed)
@@ -203,13 +207,23 @@ class _BuiltInCIScenario(ABC):
         test_dataset = self._download_dataset(
             False, directory, auto_download, test_transform
         )
-        self.train_tasks = partition_by_schedule(
-            train_dataset,
-            self.task_schedule,
-            shuffle=shuffle_data,
-            rng=generator,
-        )
-        self.test_tasks = partition_by_schedule(test_dataset, self.task_schedule)
+        if self.task_option is not None:
+            self.train_tasks = task_free_class_incremental(
+                train_dataset,
+                shuffle=shuffle_data,
+                rng=generator,
+            )
+            self.test_tasks = task_free_class_incremental(test_dataset)
+            print(f"Task-free class-incremental with {len(self.train_tasks)} tasks.")
+        else:
+            self.train_tasks = partition_by_schedule(
+                train_dataset,
+                self.task_schedule,
+                shuffle=shuffle_data,
+                rng=generator,
+            )
+            self.test_tasks = partition_by_schedule(test_dataset, self.task_schedule)
+            print(f"Task-based class-incremental with {len(self.train_tasks)} tasks.")
 
         if preload_train:
             self.train_tasks = self._preload_datasets(self.train_tasks)

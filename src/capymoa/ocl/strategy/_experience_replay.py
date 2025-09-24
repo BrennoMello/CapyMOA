@@ -305,6 +305,68 @@ class ExperienceDelayReplay(BatchClassifier, TrainTaskAware, TestTaskAware):
    
         return self.learner.batch_train(train_x, train_y)
 
+    def batch_mixed_train(self, batches: List[Tuple[Tensor, Tensor]],
+                         task_id: int) -> None:
+
+        self._step += 1
+        
+        batch_size = batches[0][0].shape[0]
+        train_instances = list()
+
+        for instance in batches:
+
+            x_ = instance[0]
+            y_ = instance[1]
+            x_ = x_.view(x_.shape[0], -1)
+            yb_pred_proba = instance[2]
+            self._buffer.update(x_, y_)
+            delay = instance[3]
+            if delay > 0:
+                # if delay == 1:
+                #     print(f"Batch Delay: {delay}")
+
+                for j in range(len(y_)):
+                    y = y_[j].item()
+                    # x = x_[j]
+                    # TODO: Generate one hot encoding for the true label
+                    num_classes = self.schema.get_num_classes()
+                    true_label_one_hot = np.eye(num_classes)[y]
+                    # predicted_probs = instance[4][j]
+                    predicted_probs = yb_pred_proba[j]
+
+                    instance_importance = self.instance_importance(true_label_one_hot, predicted_probs, delay)
+                    # print(f"Instance importance: {instance_importance}")
+                    train_instances.append((x_[j], y, instance_importance))
+            else:
+                # print("No delay for instance, adding to training instances")
+                for j in range(len(y_)):
+                    y = y_[j].item()
+                    train_instances.append((x_[j], y, torch.iinfo(torch.int32).max))
+        
+        #sort the train instances by importance
+        train_instances = sorted(
+            train_instances,
+            key=lambda item: item[2],  # Sort by importance
+            reverse=True,  # Highest importance first
+        )
+        # print(f"Sorted train instances: {len(train_instances)}")
+
+        train_instances = train_instances[:batch_size]
+        
+        #####################----------------########################## 
+        replay_x, replay_y = self._buffer.sample(batch_size)
+        train_x = torch.stack([instance[0] for instance in train_instances], dim=0)
+            
+        # print(f"Final train instances: {len(train_instances)}")
+        train_x = torch.cat((train_x, replay_x), dim=0).to(self.learner.device)
+        train_y = torch.tensor([instance[1] for instance in train_instances])
+        train_y = torch.cat((train_y, replay_y), dim=0).to(self.learner.device)
+        #####################----------------########################## 
+        
+        self._log_batches_train(train_y, task_id)
+   
+        return self.learner.batch_train(train_x, train_y)
+
     def _log_batches_train(self, train_y: Tensor, train_task_id: int):
         # count number of each classes in train_y
         class_counts = train_y.bincount(minlength=self.learner.schema.get_num_classes())

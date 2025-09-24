@@ -1,11 +1,16 @@
-from capymoa.ocl.datasets import SplitFashionMNIST, SplitCIFAR10, SplitCIFAR100
+from capymoa.ocl.datasets import (
+    SplitMNIST, SplitFashionMNIST, SplitCIFAR10, SplitCIFAR100
+    )
 from capymoa.ocl.evaluation import (
-    ocl_train_eval_delayed_loop, OCLMetrics
+    ocl_train_eval_delayed_loop, ocl_train_eval_mixed_delayed_loop, OCLMetrics
     )
 from capymoa.ocl.strategy import (
-    ExperienceReplay, ExperienceDelayReplay
+    ExperienceReplay, ExperienceDelayReplay,
+    GDumb, NCM, SLDA
     )
-from capymoa.ann import Perceptron
+from capymoa.ann import (
+    Perceptron, resnet20_32x32
+    )
 from capymoa.classifier import Finetune
 from plot import plot_multiple, ocl_plot
 import plotly.express as px
@@ -15,6 +20,7 @@ import numpy as np
 import random
 import torch
 import glob
+import json
 import os
 
 def set_seed(seed):
@@ -38,42 +44,76 @@ def clean_debug_files():
             os.remove(file_path)
 
 def run_experiment(config):
-    if config["dataset"] == "SplitCIFAR10":
-        stream = SplitCIFAR10(num_tasks=config["num_tasks"] , shuffle_tasks=True)
-    if config["dataset"] == "SplitCIFAR100":
-        stream = SplitCIFAR100(num_tasks=config["num_tasks"] , shuffle_tasks=True)
+    if config["dataset"] == "SplitMNIST":
+        stream = SplitMNIST(num_tasks=config["num_tasks"], shuffle_tasks=True)
     if config["dataset"] == "SplitFashionMNIST":
-        stream = SplitFashionMNIST(num_tasks=config["num_tasks"] , shuffle_tasks=True)
-    
+        stream = SplitFashionMNIST(num_tasks=config["num_tasks"], shuffle_tasks=True)
+    if config["dataset"] == "SplitCIFAR10":
+        stream = SplitCIFAR10(num_tasks=config["num_tasks"], shuffle_tasks=True)
+    if config["dataset"] == "SplitCIFAR100":
+        stream = SplitCIFAR100(num_tasks=config["num_tasks"], shuffle_tasks=True)
+   
     log_task_schedule(stream.task_schedule)
-
     device = "cuda" if torch.cuda.is_available() else "cpu"
     perceptron = Perceptron(schema=stream.schema, hidden_size=config["hidden_size"])
     mlp = Finetune(schema=stream.schema, model=perceptron, device=device)
-
-    if config["strategy"] == "ER":
+    
+    if config["strategy"] in ["RER", "ER_f", "ER_l", "ER_2B"]:
         learner_experience = ExperienceReplay(
             learner=mlp,
             buffer_size=config["buffer_size"]
         )
-    if config["strategy"] == "EDR":
+    elif config["strategy"] == "EDR":
         learner_experience = ExperienceDelayReplay(
             learner=mlp,
             buffer_size=config["buffer_size"],
         )
+    elif config["strategy"] == "gdumb":
+        learner_experience = GDumb(
+            schema=stream.schema,
+            model=perceptron,
+            epochs=1,
+            batch_size=config["batch_size"],
+            capacity=config["buffer_size"],
+            device=device,
+            seed=config["seed"]
+        )
+    elif config["strategy"] == "ncm":
+        learner_experience = NCM(
+            schema=stream.schema
+        )
+    elif config["strategy"] == "slda":
+        learner_experience = SLDA(
+            schema=stream.schema
+        )
+    else:
+        raise ValueError(f"Strategy {config['strategy']} not recognized.")
+    # return ocl_train_eval_delayed_loop(
+    #     learner_experience,
+    #     stream.train_loaders(batch_size=config["batch_size"]),
+    #     stream.test_loaders(batch_size=config["batch_size"]),
+    #     continual_evaluations=config["continual_evaluations"],
+    #     progress_bar=True,
+    #     eval_window_size=config["eval_window_size"],
+    #     delay_label=config["delay_label"],
+    #     select_tasks=config["select_tasks"],
+    #     no_delayed_tasks=config["no_delayed_tasks"],
+    #     start_delay_size=config["start_delay_size"],
+    #     number_delayed_batches=config["number_delayed_batches"],
+    # )
 
-    return ocl_train_eval_delayed_loop(
+    return ocl_train_eval_mixed_delayed_loop(
         learner_experience,
         stream.train_loaders(batch_size=config["batch_size"]),
         stream.test_loaders(batch_size=config["batch_size"]),
         continual_evaluations=config["continual_evaluations"],
-        progress_bar=True,
+        progress_bar=True,  
         eval_window_size=config["eval_window_size"],
-        delay_label=config["delay_label"],
+        delayed_batches=config["delay_label"],
         select_tasks=config["select_tasks"],
-        no_delayed_tasks=config["no_delayed_tasks"],
-        start_delay_size=config["start_delay_size"],
         number_delayed_batches=config["number_delayed_batches"],
+        prob_no_delay_batches=config["prob_no_delay_batches"],
+        er_strategy=config["strategy"]
     )
 
 def plot_task_results(results, config):
@@ -127,9 +167,10 @@ def plot_task_heatmaps(config):
 
 def run_experiments():
     config_repetitions = {
-        "datasets": ["SplitFashionMNIST", "SplitCIFAR10", "SplitCIFAR100"],
-        "strategies": ["EDR", "ER"]
-        # "datasets": ["SplitFashionMNIST"]
+        # "datasets": ["SplitCIFAR100"],
+        # "strategies": ["EDR", "ER_f", "ER_2B"],
+        "datasets": ["SplitMNIST", "SplitFashionMNIST", "SplitCIFAR10"],
+        "strategies": ["EDR", "RER", "ER_f", "ER_l", "ER_2B"],      
     }
     
     config = {
@@ -144,7 +185,8 @@ def run_experiments():
         "select_tasks": [],
         "no_delayed_tasks": [],  
         "start_delay_size": 0,
-        "number_delayed_batches": 2,
+        "number_delayed_batches": 1,
+        "prob_no_delay_batches": 0.4,
     }
 
     results: Dict[str, OCLMetrics] = {}
@@ -152,8 +194,8 @@ def run_experiments():
         clean_debug_files()
         config["dataset"] = dataset
         if dataset == "SplitCIFAR100":
-            config["num_tasks"] = 10
-            config["delay_label"] = 25
+            config["num_tasks"] = 5
+            config["delay_label"] = 50
 
         for strategy in config_repetitions["strategies"]:
             set_seed(424242)
@@ -161,24 +203,23 @@ def run_experiments():
             config["strategy"] = strategy
             results[strategy] = run_experiment(config)
 
-            # plots = ocl_plot(results[strategy], task_acc=True, online_acc=False, acc_all=False, acc_seen=False, )
-            # plots[0].savefig(f'plots/results_plot_{dataset}_{config["strategy"]}_{config["acc_seen"]}_{config["no_delayed_tasks"]}_{config["batch_size"]}_{config["num_tasks"]}_{config["start_delay_size"]}_{config["delay_label"]}_{config["number_delayed_batches"]}.png', 
-            #             dpi=300, bbox_inches="tight")
             plot_task_results(results[strategy], config)
             #plot_task_heatmaps(config)
 
         plot_online_accuracy(results, config)
-        # plots = plot_multiple(results, acc_seen=config["acc_seen"], acc_online=True)
-        # plots[0].savefig(f'plots/results_plot_{dataset}_{config_repetitions["strategies"]}_{config["acc_seen"]}_{config["no_delayed_tasks"]}_{config["batch_size"]}_{config["num_tasks"]}_{config["start_delay_size"]}_{config["delay_label"]}_{config["number_delayed_batches"]}.png', 
-        #                 dpi=300, bbox_inches="tight")
 
 def run_random_experiments():
     
     config_repetitions = {
-        "repetitions": 5,
-        "datasets": ["SplitFashionMNIST", "SplitCIFAR10", "SplitCIFAR100"],
-        "strategies": ["EDR", "ER"]
-        # "datasets": ["SplitFashionMNIST"]
+        "repetitions": 31,
+        # "no_delayed_batches": [0.1, 0.2, 0.3, 0.4],
+        "no_delayed_batches": [0.4],
+        # "delay_label": [10, 50, 80, 100],
+        "delay_label": [100],
+        # "datasets": ["SplitMNIST", "SplitFashionMNIST", "SplitCIFAR10"],
+        "datasets": ["SplitCIFAR10"],
+        # "strategies": ["EDR", "RER", "ER_f", "ER_l", "ER_2B"],   
+        "strategies": ["slda"],     
     }
     
     config = {
@@ -188,55 +229,71 @@ def run_random_experiments():
         "hidden_size": 64,
         "eval_window_size": 128,
         "continual_evaluations": 5,
-        "delay_label": 100,
         "acc_seen": False,
         "select_tasks": [],
         "no_delayed_tasks": [],  
         "start_delay_size": 0,
-        "number_delayed_batches": 2,
+        "number_delayed_batches": 1,
+    }
+    
+    for dataset in config_repetitions["datasets"]:       
+        config["dataset"] = dataset
+        
+        for delay in config_repetitions["delay_label"]:
+            config["delay_label"] = delay
+            
+            for no_delayed in config_repetitions["no_delayed_batches"]:
+                config["prob_no_delay_batches"] = no_delayed
+
+                for strategy in config_repetitions["strategies"]:
+                    config["strategy"] = strategy
+                    
+                    for repetition in range(config_repetitions["repetitions"]):
+                        set_seed(424242+repetition)
+                        config["seed"] = 424242+repetition
+                        
+                        print(f'Running {dataset} - {strategy} - repetition {repetition+1}/{config_repetitions["repetitions"]}')
+                        results_repetition = run_experiment(config)
+                        _save_json_results(
+                            config["dataset"],  config["delay_label"], config["prob_no_delay_batches"], config["batch_size"], 
+                            config["num_tasks"], config["strategy"], config["hidden_size"], config["eval_window_size"], 
+                            config["continual_evaluations"], config["number_delayed_batches"], results_repetition, repetition
+                            )
+                       
+
+def _save_json_results(
+    dataset, delay_label, prob_no_delay_batches, batch_size, num_tasks, strategy, hidden_size, eval_window_size,
+    continual_evaluations, number_delayed_batches, results_repetition, repetition
+):
+    os.makedirs(f"results_{dataset}", exist_ok=True)
+    
+    data_to_save = {
+        "task_index": results_repetition.task_index,
+        "accuracy_all": results_repetition.accuracy_all,
+        "anytime_task_index": results_repetition.anytime_task_index,
+        "anytime_accuracy_all": results_repetition.anytime_accuracy_all,
+        "anytime_accuracy_all_avg": results_repetition.anytime_accuracy_all_avg,
+        "accuracy_seen": results_repetition.accuracy_seen,
+        "accuracy_seen_avg": results_repetition.accuracy_seen_avg,
+        "ttt_windowed_task_index": results_repetition.ttt_windowed_task_index,
+        "ttt_windowed_accuracy": results_repetition.ttt.windowed.accuracy(),
+        "ttt_cumulative_accuracy": results_repetition.ttt.cumulative.accuracy(),
+        "ttt_metrics_per_window_accuracy": results_repetition.ttt.metrics_per_window()['accuracy']
     }
 
-    accuracy_results_ER = []
-    accuracy_results_EDR = []
-    results: Dict[str, OCLMetrics] = {}
-    for dataset in config_repetitions["datasets"]:
-       
-        config["dataset"] = dataset
-        if dataset == "SplitCIFAR100":
-            config["num_tasks"] = 10
-            config["delay_label"] = 25
+    for k, v in data_to_save.items():
+        if isinstance(v, np.ndarray):
+            data_to_save[k] = v.tolist()
+        elif isinstance(v, pd.Series):
+            data_to_save[k] = v.tolist()
 
-        for strategy in config_repetitions["strategies"]:
-            config["strategy"] = strategy
-            for repetition in range(config_repetitions["repetitions"]):
-                set_seed(424242+repetition)
-                print(f'Running {dataset} - {strategy} - repetition {repetition+1}/{config_repetitions["repetitions"]}')
-                results[strategy] = run_experiment(config)
+    filename = f"results_{dataset}/results_{dataset}_{delay_label}_{prob_no_delay_batches}_{batch_size}_{num_tasks}_{strategy}_{hidden_size}_{eval_window_size}_{continual_evaluations}_{number_delayed_batches}_{repetition}.json"
+    
+    with open(filename, "w") as f:
+        json.dump(data_to_save, f, indent=4)
 
-                if strategy == "ER":
-                    accuracy_results_ER.append(results[strategy].ttt.cumulative.accuracy() / 100)
-                if strategy == "EDR":
-                    accuracy_results_EDR.append(results[strategy].ttt.cumulative.accuracy() / 100)
-
-            #log mean and std of accuracy_results
-            if strategy == "ER":
-                mean_accuracy = round(np.mean(accuracy_results_ER, axis=0), 2)
-                std_accuracy = round(np.std(accuracy_results_ER, axis=0), 2)
-                print(f'Mean accuracy {mean_accuracy}')
-                print(f'Std accuracy {std_accuracy}')
-  
-                np.savetxt(f'results_mean_std_{dataset}_{strategy}_{config["acc_seen"]}_{config["no_delayed_tasks"]}_{config["batch_size"]}_{config["num_tasks"]}_{config["start_delay_size"]}_{config["delay_label"]}_{config["number_delayed_batches"]}.csv', 
-                             np.column_stack((mean_accuracy, std_accuracy)), delimiter=",", header="mean_accuracy,std_accuracy", comments="", fmt="%.2f")
-                accuracy_results_ER = []
-            if strategy == "EDR":
-                mean_accuracy = round(np.mean(accuracy_results_EDR, axis=0), 2)
-                std_accuracy = round(np.std(accuracy_results_EDR, axis=0), 2)
-                print(f'Mean accuracy {mean_accuracy}')
-                print(f'Std accuracy {std_accuracy}')
-  
-                np.savetxt(f'results_mean_std_{dataset}_{strategy}_{config["acc_seen"]}_{config["no_delayed_tasks"]}_{config["batch_size"]}_{config["num_tasks"]}_{config["start_delay_size"]}_{config["delay_label"]}_{config["number_delayed_batches"]}.csv', 
-                             np.column_stack((mean_accuracy, std_accuracy)), delimiter=",", header="mean_accuracy,std_accuracy", comments="", fmt="%.2f")
-                accuracy_results_EDR = []
 
 if __name__ == "__main__":
     run_random_experiments()
+    # run_experiments()
+    

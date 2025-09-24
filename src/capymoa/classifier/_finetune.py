@@ -85,6 +85,7 @@ class Finetune(BatchClassifier):
         self.device: torch.device = torch.device(device)
         #: The data type to convert the input data to.
         self.dtype: torch.dtype = next(self.model.parameters()).dtype
+       
 
     def batch_train(self, x: Tensor, y: Tensor) -> None:
         self.model.train()
