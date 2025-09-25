@@ -29,7 +29,7 @@ We provide scripts for data preparation, model training, evaluation, and visuali
 ## ⚙️ Installation
 
 ```bash
-git clone https://github.com/username/my-AAAI-project.git
+git clone https://github.com/username/my-project.git (update after acceptance) 
 cd CapyMOA
 python3 -m venv venv
 source venv/bin/activate
