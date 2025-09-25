@@ -88,6 +88,7 @@ def run_experiment(config):
         )
     else:
         raise ValueError(f"Strategy {config['strategy']} not recognized.")
+    
     # return ocl_train_eval_delayed_loop(
     #     learner_experience,
     #     stream.train_loaders(batch_size=config["batch_size"]),
