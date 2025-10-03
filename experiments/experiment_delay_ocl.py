@@ -212,15 +212,15 @@ def run_experiments():
 def run_random_experiments():
     
     config_repetitions = {
-        "repetitions": 31,
+        "repetitions": 2,
         # "no_delayed_batches": [0.1, 0.2, 0.3, 0.4],
         "no_delayed_batches": [0.4],
         # "delay_label": [10, 50, 80, 100],
         "delay_label": [100],
         # "datasets": ["SplitMNIST", "SplitFashionMNIST", "SplitCIFAR10"],
         "datasets": ["SplitCIFAR10"],
-        # "strategies": ["EDR", "RER", "ER_f", "ER_l", "ER_2B"],   
-        "strategies": ["slda"],     
+        "strategies": ["EDR", "RER", "ER_f", "ER_l", "ER_2B"],   
+        # "strategies": ["slda"],     
     }
     
     config = {
