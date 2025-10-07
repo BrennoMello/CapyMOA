@@ -49,7 +49,7 @@ torch.Size([1, 28, 28])
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Callable, List, Optional, Sequence, Set, Tuple, cast
+from typing import Any, Callable, List, Optional, Sequence, Set, Tuple, Generator, cast
 
 from capymoa.datasets._utils import download_numpy_dataset, TensorDatasetWithTransform
 import torch
@@ -58,7 +58,7 @@ from torch.utils.data import DataLoader, Dataset, TensorDataset, ConcatDataset
 from torchvision import datasets
 from torchvision.transforms import Compose, Normalize, ToTensor
 
-from capymoa.datasets import get_download_dir
+from capymoa.datasets import get_download_dir, download_unpacked
 from capymoa.instance import LabeledInstance
 from capymoa.ocl.util.data import (
         class_incremental_schedule, partition_by_schedule, task_free_class_incremental
@@ -66,11 +66,17 @@ from capymoa.ocl.util.data import (
 from capymoa.stream import Stream, TorchClassifyStream
 from capymoa.stream._stream import Schema
 
+from json import dump as json_dump, load as json_load
+from PIL import Image, ImageFile
+import numpy as np
+import os
+
 
 _SOURCES = {
     "capymoa_tiny_mnist": "https://www.dropbox.com/scl/fi/ry3mqtic4gr02u8kux5yz/capymoa_tiny_mnist.tar.gz?rlkey=khdrktr0ulmjcpbkbhejwfq36&st=0icbomup&dl=1",
     "CIFAR100-vit_base_patch16_224_augreg_in21k": "https://www.dropbox.com/scl/fi/twk8c21xgs5j13xxmcm7q/CIFAR100-vit_base_patch16_224_augreg_in21k.tar.gz?rlkey=xbg7olp440szekvooenes8dhp&st=cznv0q5t&dl=1",
     "CIFAR10-vit_base_patch16_224_augreg_in21k": "https://www.dropbox.com/scl/fi/adxx5u399klcugqk3xlix/CIFAR10-vit_base_patch16_224_augreg_in21k.tar.gz?rlkey=ozfddbomkyt78oyco3c11hz4f&st=xd24ewmr&dl=1",
+    "TinyImagenet": "http://cs231n.stanford.edu/tiny-imagenet-200.zip"
 }
 
 
@@ -565,3 +571,164 @@ class SplitCIFAR100(_BuiltInCIScenario):
             download=auto_download,
             transform=transform,
         )
+
+class SplitTinyImagenet(_BuiltInCIScenario):
+    _normalize = True # Caso altere o valor deste atributo, delete a pasta "<diretorio_do_capymoa>/data/tiny-imagenet-200" (pasta onde fica o dataset)
+    _feature_type = np.float32 if _normalize else np.uint8
+    _label_type = np.int16
+    _dataset_key = "tiny-imagenet-200"
+    num_classes = 200
+    default_task_count = 100
+    labels_to_wnids: dict[int, str] = {}
+    # mean = []
+    # std = []
+
+    @classmethod
+    def _normalized_image(cls, img: Image.Image | ImageFile.ImageFile) -> np.ndarray:
+        return np.array(img, cls._feature_type) / 255.0
+    
+    @classmethod
+    def _build_train(cls, path: Path, wnids: dict[str, int], train_y: list[int]) -> Generator[np.ndarray[np.uint8], None, None]:
+        def _gen_arrays_from_images_path(img_path: Path) -> Generator[np.ndarray[np.uint8], None, None]:
+            for file in os.listdir(img_path):
+                with Image.open(img_path/file) as img_:
+                    img = img_
+
+                    if img.mode != "RGB":
+                        img = img.convert("RGB")
+                    
+                    if cls._normalize:
+                        yield cls._normalized_image(img)
+                    else:
+                        yield np.array(img, cls._feature_type)
+
+        for wnid, label in wnids.items():
+            for img in _gen_arrays_from_images_path(path/wnid/"images"):
+                train_y.append(label)
+                yield img
+    
+    @classmethod
+    def _build_test(cls, path: Path, wnids: dict[str, int], train_y: list[int]) -> Generator[np.ndarray[np.uint8], None, None]:
+        with open(path/"val_annotations.txt") as va:
+            for line in va.readlines():
+                img, wnid = line.split()[:2]
+
+                with Image.open(path/"images"/img) as img_:
+                    i = img_
+
+                    if i.mode != "RGB":
+                        i = i.convert("RGB")
+
+                    train_y.append(wnids[wnid])
+
+                    if cls._normalize:
+                        yield cls._normalized_image(i)
+
+                    else:
+                        yield np.array(i, cls._feature_type)
+    
+    @classmethod
+    def _save_dataset(cls, filepath: Path, arr: np.ndarray):
+        CHUNK_SIZE = 10_000
+        shape = arr.shape
+        dtype = arr.dtype
+        print(filepath, shape, dtype)
+
+        dat = np.memmap(filepath, dtype, "w+", shape=shape)
+
+        for i in range(0, shape[0], CHUNK_SIZE):
+            dat[i:i+CHUNK_SIZE] = arr[i:i+CHUNK_SIZE]
+            dat.flush()
+        
+        del dat
+    
+    @classmethod
+    def _load_dataset(cls, filepath: Path, shape, dtype) -> np.ndarray:
+        CHUNK_SIZE = 10_000
+
+        dat = np.memmap(filepath, dtype, 'r', shape=shape)
+        arr = np.empty(shape, dtype)
+
+        for i in range(0, shape[0], CHUNK_SIZE):
+            arr[i:i+CHUNK_SIZE] = dat[i:i+CHUNK_SIZE]
+            dat.flush()
+        
+        del dat
+
+        return arr
+
+    @classmethod
+    def _download_and_build_dataset(cls) -> Path:
+        path = download_unpacked(_SOURCES["TinyImagenet"], get_download_dir())
+        tmp_path = path / cls._dataset_key
+
+        with open(tmp_path/"wnids.txt") as wnids:
+            labels: dict[int, str] = {}
+            c = 0
+
+            for line in wnids.readlines():
+                line = line.strip()
+
+                if len(line) > 0:
+                    labels[c] = line
+                    c += 1
+            
+            with open(path/"labels_to_wnids.json", 'w') as j:
+                json_dump(labels, j, indent=4)
+        
+        cls.labels_to_wnids = labels
+        wnid_to_label = dict(zip(labels.values(), labels.keys()))
+
+        train_y_tmp: list[int] = []
+        train_x = np.array(list(cls._build_train(tmp_path/"train", wnid_to_label, train_y_tmp)))
+        train_y = np.array(train_y_tmp, dtype=np.long)
+
+        cls._save_dataset(path/"train_x.dat", train_x)
+        cls._save_dataset(path/"train_y.dat", train_y)
+
+        del train_x, train_y, train_y_tmp
+        
+        test_y_tmp: list[int] = []
+        test_x = np.array(list(cls._build_test(tmp_path/"val", wnid_to_label, test_y_tmp)))
+        test_y = np.array(test_y_tmp, np.long)
+
+        cls._save_dataset(path/"test_x.dat", test_x)
+        cls._save_dataset(path/"test_y.dat", test_y)
+
+        del test_x, test_y, test_y_tmp
+
+        from shutil import rmtree
+        rmtree(tmp_path)
+
+        return path
+
+    @classmethod
+    def _download_dataset(cls, train, directory, auto_download, transform):
+        try:
+            path = cls._download_and_build_dataset()
+
+        except FileExistsError: # Dataset já foi baixado e configurado
+            path = get_download_dir() / cls._dataset_key
+
+            with open(path/"labels_to_wnids.json") as j:
+                cls.labels_to_wnids = json_load(j)
+
+        if train:
+            train_x = cls._load_dataset(path/"train_x.dat", (100000, 64, 64, 3), cls._feature_type)
+            train_y = cls._load_dataset(path/"train_y.dat", (100000,), cls._label_type)
+
+            return TensorDatasetWithTransform(
+                train_x,
+                train_y,
+                transform=transform,
+            )
+        
+        else:
+            test_x = cls._load_dataset(path/"test_x.dat", (10000, 64, 64, 3), cls._feature_type)
+            test_y = cls._load_dataset(path/"test_y.dat", (10000,), cls._label_type)
+            
+            return TensorDatasetWithTransform(
+                test_x,
+                test_y,
+                transform=transform,
+            )
