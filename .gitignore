@@ -192,3 +192,9 @@ docs/api/modules
 
 notebooks/.ipynb_checkpoints
 *.pdf
+
+# Pyenv
+pyvenv.cfg
+share/
+etc/
+bin/

@@ -2,12 +2,14 @@ import math
 import os
 import torch
 import numpy as np
-from torch import Tensor
-from typing import List, Optional, Tuple
+from torch import Tensor, nn
+from typing import List, Optional, Tuple, Literal
 
 from capymoa.base import BatchClassifier
+from capymoa.classifier import Finetune
 from capymoa.ocl.base import TrainTaskAware, TestTaskAware
 from capymoa.ocl.util._coreset import ReservoirSampler
+from capymoa.stream import Schema
 
 
 class ExperienceReplay(BatchClassifier, TrainTaskAware, TestTaskAware):
@@ -391,3 +393,36 @@ class ExperienceDelayReplay(BatchClassifier, TrainTaskAware, TestTaskAware):
 
     def __str__(self) -> str:
         return f"ExperienceReplay(buffer_size={self._buffer.capacity})"
+
+
+class ExperienceReplayAsymmetricCrossEntropy(ExperienceReplay):
+    class ACELoss(nn.CrossEntropyLoss):
+        def __init__(self, device, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.seen_so_far = torch.LongTensor(size=(0,)).to(device)
+            self.not_first = False
+
+        def forward(self, logits: Tensor, target: Tensor) -> Tensor:
+            present = target.unique()
+            self.seen_so_far = torch.cat([self.seen_so_far, present]).unique()
+
+            mask = torch.zeros_like(logits)
+            mask[:, present] = 1
+            mask[:, self.seen_so_far.max():] = 1
+
+            if self.not_first:
+                logits  = logits.masked_fill(mask == 0, -1e9)
+
+            else:
+                self.not_first = True
+            
+            loss = super().forward(logits, target)
+
+            return loss
+
+    def __init__(
+        self, schema: Schema, model: nn.Module, device: Literal['cpu', 'cuda'], buffer_size: int = 200, repeat: int = 1
+    ):
+        learner = Finetune(schema, model, device=device)
+        learner.criterion = self.ACELoss(learner.device)
+        super().__init__(learner, buffer_size, repeat)
