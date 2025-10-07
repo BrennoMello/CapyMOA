@@ -1,11 +1,11 @@
 from capymoa.ocl.datasets import (
-    SplitMNIST, SplitFashionMNIST, SplitCIFAR10, SplitCIFAR100
+    SplitMNIST, SplitFashionMNIST, SplitCIFAR10, SplitCIFAR100, SplitTinyImagenet, TinySplitMNIST
     )
 from capymoa.ocl.evaluation import (
     ocl_train_eval_delayed_loop, ocl_train_eval_mixed_delayed_loop, OCLMetrics
     )
 from capymoa.ocl.strategy import (
-    ExperienceReplay, ExperienceDelayReplay,
+    ExperienceReplay, ExperienceDelayReplay, ExperienceReplayAsymmetricCrossEntropy,
     GDumb, NCM, SLDA
     )
 from capymoa.ann import (
@@ -43,7 +43,7 @@ def clean_debug_files():
         if os.path.isfile(file_path):
             os.remove(file_path)
 
-def run_experiment(config):
+def run_experiment(config: dict[str, str | int | float]):
     if config["dataset"] == "SplitMNIST":
         stream = SplitMNIST(num_tasks=config["num_tasks"], shuffle_tasks=True)
     if config["dataset"] == "SplitFashionMNIST":
@@ -52,6 +52,10 @@ def run_experiment(config):
         stream = SplitCIFAR10(num_tasks=config["num_tasks"], shuffle_tasks=True)
     if config["dataset"] == "SplitCIFAR100":
         stream = SplitCIFAR100(num_tasks=config["num_tasks"], shuffle_tasks=True)
+    if config["dataset"] == "TinySplitMNIST":
+        stream = TinySplitMNIST(num_tasks=config["num_tasks"], shuffle_tasks=True)
+    if config["dataset"] == "SplitTinyImagenet":
+        stream = SplitTinyImagenet(num_tasks=config["num_tasks"], shuffle_tasks=True)
    
     log_task_schedule(stream.task_schedule)
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -66,6 +70,13 @@ def run_experiment(config):
     elif config["strategy"] == "EDR":
         learner_experience = ExperienceDelayReplay(
             learner=mlp,
+            buffer_size=config["buffer_size"],
+        )
+    elif config["strategy"] == "ER-ACE":
+        learner_experience = ExperienceReplayAsymmetricCrossEntropy(
+            schema=stream.schema,
+            model=perceptron,
+            device=device,
             buffer_size=config["buffer_size"],
         )
     elif config["strategy"] == "gdumb":
@@ -170,8 +181,10 @@ def run_experiments():
     config_repetitions = {
         # "datasets": ["SplitCIFAR100"],
         # "strategies": ["EDR", "ER_f", "ER_2B"],
-        "datasets": ["SplitMNIST", "SplitFashionMNIST", "SplitCIFAR10"],
-        "strategies": ["EDR", "RER", "ER_f", "ER_l", "ER_2B"],      
+        # "datasets": ["SplitMNIST", "SplitFashionMNIST", "SplitCIFAR10"],
+        # "strategies": ["EDR", "RER", "ER_f", "ER_l", "ER_2B"],      
+        "datasets": ["SplitMNIST"],
+        "strategies": ["ER-ACE"],
     }
     
     config = {
@@ -295,6 +308,6 @@ def _save_json_results(
 
 
 if __name__ == "__main__":
-    run_random_experiments()
-    # run_experiments()
+    #run_random_experiments()
+    run_experiments()
     
