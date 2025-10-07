@@ -89,20 +89,6 @@ def run_experiment(config):
     else:
         raise ValueError(f"Strategy {config['strategy']} not recognized.")
     
-    # return ocl_train_eval_delayed_loop(
-    #     learner_experience,
-    #     stream.train_loaders(batch_size=config["batch_size"]),
-    #     stream.test_loaders(batch_size=config["batch_size"]),
-    #     continual_evaluations=config["continual_evaluations"],
-    #     progress_bar=True,
-    #     eval_window_size=config["eval_window_size"],
-    #     delay_label=config["delay_label"],
-    #     select_tasks=config["select_tasks"],
-    #     no_delayed_tasks=config["no_delayed_tasks"],
-    #     start_delay_size=config["start_delay_size"],
-    #     number_delayed_batches=config["number_delayed_batches"],
-    # )
-
     return ocl_train_eval_mixed_delayed_loop(
         learner_experience,
         stream.train_loaders(batch_size=config["batch_size"]),
@@ -212,7 +198,7 @@ def run_experiments():
 def run_random_experiments():
     
     config_repetitions = {
-        "repetitions": 2,
+        "repetitions": 1,
         # "no_delayed_batches": [0.1, 0.2, 0.3, 0.4],
         "no_delayed_batches": [0.4],
         # "delay_label": [10, 50, 80, 100],
