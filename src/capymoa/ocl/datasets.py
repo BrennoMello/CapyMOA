@@ -67,7 +67,7 @@ from capymoa.stream import Stream, TorchClassifyStream
 from capymoa.stream._stream import Schema
 
 from json import dump as json_dump, load as json_load
-from PIL import Image
+from PIL import Image, ImageFile
 import numpy as np
 import os
 
@@ -584,7 +584,7 @@ class SplitTinyImagenet(_BuiltInCIScenario):
     # std = []
 
     @classmethod
-    def _normalized_image(cls, img: Image.Image | Image.ImageFile.ImageFile) -> np.ndarray:
+    def _normalized_image(cls, img: Image.Image | ImageFile.ImageFile) -> np.ndarray:
         return np.array(img, cls._feature_type) / 255.0
     
     @classmethod
