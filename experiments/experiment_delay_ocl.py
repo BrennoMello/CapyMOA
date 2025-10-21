@@ -167,9 +167,10 @@ def run_experiments():
     config_repetitions = {
         # "datasets": ["SplitCIFAR100"],
         # "strategies": ["EDR", "ER_f", "ER_2B"],
-        # "datasets": ["SplitMNIST", "SplitFashionMNIST", "SplitCIFAR10"],
-        # "strategies": ["EDR", "RER", "ER_f", "ER_l", "ER_2B"],      
-        "datasets": ["SplitMNIST"],
+        "datasets": ["SplitMNIST", "SplitCIFAR10", "SplitCIFAR100"],
+        # "strategies": ["RER", "ER_f", "ER_l", "ER_2B", "ER-ACE"],      
+        # "datasets": ["SplitMNIST"],
+        # "datasets": ["SplitTinyImagenet"],
         "strategies": ["ER-ACE"],
     }
     
@@ -219,6 +220,8 @@ def run_random_experiments():
         # "datasets": ["SplitMNIST", "SplitFashionMNIST", "SplitCIFAR10"],
         "datasets": ["SplitCIFAR10"],
         "strategies": ["EDR", "RER", "ER_f", "ER_l", "ER_2B"],   
+        "datasets": ["SplitMNIST", "SplitCIFAR10", "SplitCIFAR100"],
+        "strategies": ["ER-ACE"]
         # "strategies": ["slda"],     
     }
     
@@ -259,6 +262,7 @@ def run_random_experiments():
                             config["num_tasks"], config["strategy"], config["hidden_size"], config["eval_window_size"], 
                             config["continual_evaluations"], config["number_delayed_batches"], results_repetition, repetition
                             )
+                        plot_task_results(results_repetition, config)
                        
 
 def _save_json_results(

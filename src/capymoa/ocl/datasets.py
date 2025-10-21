@@ -573,7 +573,7 @@ class SplitCIFAR100(_BuiltInCIScenario):
         )
 
 class SplitTinyImagenet(_BuiltInCIScenario):
-    _normalize = True # Caso altere o valor deste atributo, delete a pasta "<diretorio_do_capymoa>/data/tiny-imagenet-200" (pasta onde fica o dataset)
+    _normalize = False # Caso altere o valor deste atributo, delete a pasta "<diretorio_do_capymoa>/data/tiny-imagenet-200" (pasta onde fica o dataset)
     _feature_type = np.float32 if _normalize else np.uint8
     _label_type = np.int16
     _dataset_key = "tiny-imagenet-200"
