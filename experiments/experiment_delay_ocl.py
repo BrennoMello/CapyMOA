@@ -171,9 +171,10 @@ def run_experiments():
     config_repetitions = {
         # "datasets": ["SplitCIFAR100"],
         # "strategies": ["EDR", "ER_f", "ER_2B"],
-        # "datasets": ["SplitMNIST", "SplitFashionMNIST", "SplitCIFAR10"],
-        # "strategies": ["EDR", "RER", "ER_f", "ER_l", "ER_2B"],      
-        "datasets": ["SplitTinyImagenet"],
+        "datasets": ["SplitMNIST", "SplitCIFAR10", "SplitCIFAR100"],
+        # "strategies": ["RER", "ER_f", "ER_l", "ER_2B", "ER-ACE"],      
+        # "datasets": ["SplitMNIST"],
+        # "datasets": ["SplitTinyImagenet"],
         "strategies": ["ER-ACE"],
     }
     
@@ -221,10 +222,9 @@ def run_random_experiments():
         # "delay_label": [10, 50, 80, 100],
         "delay_label": [100],
         # "datasets": ["SplitMNIST", "SplitFashionMNIST", "SplitCIFAR10"],
-        "datasets": ["SplitFashionMNIST"],
-        # "strategies": ["EDR", "RER", "ER_f", "ER_l", "ER_2B"],   
-        # "strategies": ["slda"],
-        "strategies": ["ER-ACE"],        
+        "datasets": ["SplitCIFAR10"],
+        "strategies": ["EDR", "RER", "ER_f", "ER_l", "ER_2B"],   
+        # "strategies": ["slda"],     
     }
     
     config = {
@@ -264,6 +264,7 @@ def run_random_experiments():
                             config["num_tasks"], config["strategy"], config["hidden_size"], config["eval_window_size"], 
                             config["continual_evaluations"], config["number_delayed_batches"], results_repetition, repetition
                             )
+                        plot_task_results(results_repetition, config)
                        
 
 def _save_json_results(
