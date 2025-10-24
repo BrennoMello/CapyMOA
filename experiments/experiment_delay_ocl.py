@@ -221,12 +221,10 @@ def run_random_experiments():
         "no_delayed_batches": [0.4],
         # "delay_label": [10, 50, 80, 100],
         "delay_label": [100],
-        # "datasets": ["SplitMNIST", "SplitFashionMNIST", "SplitCIFAR10"],
-        "datasets": ["SplitCIFAR10"],
-        "strategies": ["RER", "ER_f", "ER_l", "ER_2B", "EDR", "ER-ACE"],   
-        "datasets": ["SplitMNIST", "SplitCIFAR10", "SplitCIFAR100"],
-        # "strategies": ["RER"]
-        # "strategies": ["slda"],     
+        # "strategies": ["gdumb", "ncm", "slda"],
+        # "strategies": ["RER", "ER_f", "ER_l", "ER_2B", "EDR", "ER-ACE"],
+        "strategies": ["ER-ACE"],
+        "datasets": ["SplitMNIST", "SplitFashionMNIST", "SplitCIFAR10", "SplitCIFAR100"],
     }
     
     config = {

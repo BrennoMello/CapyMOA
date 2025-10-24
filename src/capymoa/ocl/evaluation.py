@@ -802,6 +802,7 @@ def ocl_train_eval_mixed_delayed_loop(
                             _batch_train(learner, batches_instances[0][0], batches_instances[0][1], train_task_id)
                         elif (
                             er_strategy == "ER_2B"
+                            or er_strategy == "ER-ACE"
                             or er_strategy == "gdumb"
                             or er_strategy == "ncm"
                             or er_strategy == "slda"
