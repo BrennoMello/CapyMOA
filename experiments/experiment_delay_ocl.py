@@ -60,10 +60,10 @@ def run_experiment(config: dict[str, str | int | float]):
     log_task_schedule(stream.task_schedule)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    model = resnet20_32x32(num_classes=stream.schema.get_num_classes() )
-    mlp = Finetune(schema=stream.schema, model=model, device=device)
-    # perceptron = Perceptron(schema=stream.schema, hidden_size=config["hidden_size"])
-    # mlp = Finetune(schema=stream.schema, model=perceptron, device=device)
+    # model = resnet20_32x32(num_classes=stream.schema.get_num_classes() )
+    # mlp = Finetune(schema=stream.schema, model=model, device=device)
+    perceptron = Perceptron(schema=stream.schema, hidden_size=config["hidden_size"])
+    mlp = Finetune(schema=stream.schema, model=perceptron, device=device)
     
     if config["strategy"] in ["RER", "ER_f", "ER_l", "ER_2B"]:
         learner_experience = ExperienceReplay(
@@ -78,8 +78,8 @@ def run_experiment(config: dict[str, str | int | float]):
     elif config["strategy"] == "ER-ACE":
         learner_experience = ExperienceReplayAsymmetricCrossEntropy(
             schema=stream.schema,
-            # model=perceptron,
-            model=model,
+            model=perceptron,
+            # model=model,
             device=device,
             buffer_size=config["buffer_size"],
         )
@@ -216,14 +216,16 @@ def run_experiments():
 def run_random_experiments():
     
     config_repetitions = {
-        "repetitions": 3,
+        "repetitions": 2,
         # "no_delayed_batches": [0.1, 0.2, 0.3, 0.4],
         "no_delayed_batches": [0.4],
         # "delay_label": [10, 50, 80, 100],
         "delay_label": [100],
         # "datasets": ["SplitMNIST", "SplitFashionMNIST", "SplitCIFAR10"],
         "datasets": ["SplitCIFAR10"],
-        "strategies": ["EDR", "RER", "ER_f", "ER_l", "ER_2B"],   
+        "strategies": ["RER", "ER_f", "ER_l", "ER_2B", "EDR", "ER-ACE"],   
+        "datasets": ["SplitMNIST", "SplitCIFAR10", "SplitCIFAR100"],
+        # "strategies": ["RER"]
         # "strategies": ["slda"],     
     }
     
