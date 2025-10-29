@@ -69,6 +69,7 @@ from capymoa.stream._stream import Schema
 from json import dump as json_dump, load as json_load
 from PIL import Image, ImageFile
 import numpy as np
+import shutil
 import os
 
 
@@ -572,6 +573,7 @@ class SplitCIFAR100(_BuiltInCIScenario):
             transform=transform,
         )
 
+'''
 class SplitTinyImagenet(_BuiltInCIScenario):
     _normalize = True # Caso altere o valor deste atributo, delete a pasta "<diretorio_do_capymoa>/data/tiny-imagenet-200" (pasta onde fica o dataset)
     _feature_type = np.float32 if _normalize else np.uint8
@@ -732,3 +734,53 @@ class SplitTinyImagenet(_BuiltInCIScenario):
                 test_y,
                 transform=transform,
             )
+'''
+
+
+class _CustomDataLoader(DataLoader):
+    def __getitem__(self, index):
+        return self.dataset[index]
+    
+
+class SplitTinyImagenet(_BuiltInCIScenario):
+    _dataset_key = "tiny-imagenet-200"
+    num_classes = 200
+    default_task_count = 100
+    labels_to_wnids: dict[int, str] = {}
+    # _batch_size = 32
+    _num_workers = 12
+    # mean = []
+    # std = []
+
+    @classmethod
+    def _download_dataset(cls, train, directory, auto_download, transform):
+        try:
+            path = download_unpacked(_SOURCES["TinyImagenet"], get_download_dir())
+            tmp_path = path / cls._dataset_key
+            
+            for file in os.listdir(tmp_path):
+                os.rename(tmp_path/file, path/file)
+            
+            os.rmdir(tmp_path)
+
+            val = path/"val"
+            with open(val/'val_annotations.txt') as v:
+                for fn, lb in (l.strip().split()[:2] for l in v.readlines()):
+                    if not os.path.exists(val/lb):
+                        os.mkdir(val/lb)
+                    os.rename(val/f'images/{fn}', val/lb/fn)
+            
+            os.rmdir(val/"images")
+        
+        except FileExistsError:
+            path = get_download_dir() / cls._dataset_key
+
+        if train:
+            ds = datasets.ImageFolder(path/"train", transform)
+        else:
+            ds = datasets.ImageFolder(path/"val", transform)
+        
+        return _CustomDataLoader(ds, num_workers=cls._num_workers, pin_memory=True)
+
+if __name__ == "__main__":
+    i = SplitTinyImagenet()
