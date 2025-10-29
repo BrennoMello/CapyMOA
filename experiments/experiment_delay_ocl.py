@@ -59,6 +59,9 @@ def run_experiment(config: dict[str, str | int | float]):
    
     log_task_schedule(stream.task_schedule)
     device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    # model = resnet20_32x32(num_classes=stream.schema.get_num_classes() )
+    # mlp = Finetune(schema=stream.schema, model=model, device=device)
     perceptron = Perceptron(schema=stream.schema, hidden_size=config["hidden_size"])
     mlp = Finetune(schema=stream.schema, model=perceptron, device=device)
     
@@ -76,6 +79,7 @@ def run_experiment(config: dict[str, str | int | float]):
         learner_experience = ExperienceReplayAsymmetricCrossEntropy(
             schema=stream.schema,
             model=perceptron,
+            # model=model,
             device=device,
             buffer_size=config["buffer_size"],
         )
@@ -100,20 +104,6 @@ def run_experiment(config: dict[str, str | int | float]):
     else:
         raise ValueError(f"Strategy {config['strategy']} not recognized.")
     
-    # return ocl_train_eval_delayed_loop(
-    #     learner_experience,
-    #     stream.train_loaders(batch_size=config["batch_size"]),
-    #     stream.test_loaders(batch_size=config["batch_size"]),
-    #     continual_evaluations=config["continual_evaluations"],
-    #     progress_bar=True,
-    #     eval_window_size=config["eval_window_size"],
-    #     delay_label=config["delay_label"],
-    #     select_tasks=config["select_tasks"],
-    #     no_delayed_tasks=config["no_delayed_tasks"],
-    #     start_delay_size=config["start_delay_size"],
-    #     number_delayed_batches=config["number_delayed_batches"],
-    # )
-
     return ocl_train_eval_mixed_delayed_loop(
         learner_experience,
         stream.train_loaders(batch_size=config["batch_size"]),
@@ -181,9 +171,10 @@ def run_experiments():
     config_repetitions = {
         # "datasets": ["SplitCIFAR100"],
         # "strategies": ["EDR", "ER_f", "ER_2B"],
-        # "datasets": ["SplitMNIST", "SplitFashionMNIST", "SplitCIFAR10"],
-        # "strategies": ["EDR", "RER", "ER_f", "ER_l", "ER_2B"],      
-        "datasets": ["SplitMNIST"],
+        "datasets": ["SplitMNIST", "SplitCIFAR10", "SplitCIFAR100"],
+        # "strategies": ["RER", "ER_f", "ER_l", "ER_2B", "ER-ACE"],      
+        # "datasets": ["SplitMNIST"],
+        # "datasets": ["SplitTinyImagenet"],
         "strategies": ["ER-ACE"],
     }
     
@@ -225,15 +216,15 @@ def run_experiments():
 def run_random_experiments():
     
     config_repetitions = {
-        "repetitions": 31,
+        "repetitions": 2,
         # "no_delayed_batches": [0.1, 0.2, 0.3, 0.4],
         "no_delayed_batches": [0.4],
         # "delay_label": [10, 50, 80, 100],
         "delay_label": [100],
-        # "datasets": ["SplitMNIST", "SplitFashionMNIST", "SplitCIFAR10"],
-        "datasets": ["SplitCIFAR10"],
-        # "strategies": ["EDR", "RER", "ER_f", "ER_l", "ER_2B"],   
-        "strategies": ["slda"],     
+        # "strategies": ["gdumb", "ncm", "slda"],
+        # "strategies": ["RER", "ER_f", "ER_l", "ER_2B", "EDR", "ER-ACE"],
+        "strategies": ["ER-ACE"],
+        "datasets": ["SplitMNIST", "SplitFashionMNIST", "SplitCIFAR10", "SplitCIFAR100"],
     }
     
     config = {
@@ -273,6 +264,7 @@ def run_random_experiments():
                             config["num_tasks"], config["strategy"], config["hidden_size"], config["eval_window_size"], 
                             config["continual_evaluations"], config["number_delayed_batches"], results_repetition, repetition
                             )
+                        plot_task_results(results_repetition, config)
                        
 
 def _save_json_results(
@@ -308,6 +300,6 @@ def _save_json_results(
 
 
 if __name__ == "__main__":
-    #run_random_experiments()
-    run_experiments()
+    run_random_experiments()
+    # run_experiments()
     

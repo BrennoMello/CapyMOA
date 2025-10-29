@@ -8,6 +8,7 @@ from capymoa.ocl.strategy import (
         ExperienceReplay, GDumb, NCM, SLDA
     )
 
+from capymoa.ocl.strategy._experience_replay import ExperienceDelayReplay
 import numpy as np
 import torch
 from torch import Tensor
@@ -310,10 +311,15 @@ def _batch_train(learner: Classifier, x: Tensor, y: Tensor, train_task_id: int):
     """Train a batch of instances using the learner."""
     batch_size = x.shape[0]
     x = x.view(batch_size, -1)
-    if isinstance(learner, BatchClassifier):
+    if isinstance(learner, ExperienceReplay) or isinstance(learner, ExperienceDelayReplay):
         x = x.to(dtype=learner.x_dtype, device=learner.device)
         y = y.to(dtype=learner.y_dtype, device=learner.device)
-        # learner.batch_train(x, y, train_task_id)
+        
+        learner.batch_train(x, y, train_task_id)
+    elif isinstance(learner, BatchClassifier):
+        x = x.to(dtype=learner.x_dtype, device=learner.device)
+        y = y.to(dtype=learner.y_dtype, device=learner.device)
+        
         learner.batch_train(x, y)
     else:
         for i in range(batch_size):
@@ -796,6 +802,7 @@ def ocl_train_eval_mixed_delayed_loop(
                             _batch_train(learner, batches_instances[0][0], batches_instances[0][1], train_task_id)
                         elif (
                             er_strategy == "ER_2B"
+                            or er_strategy == "ER-ACE"
                             or er_strategy == "gdumb"
                             or er_strategy == "ncm"
                             or er_strategy == "slda"
