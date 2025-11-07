@@ -618,7 +618,7 @@ class SplitTinyImagenet(_BuiltInCIScenario):
         else:
             ds = datasets.ImageFolder(path/"val", transform)
         
-        return _CustomDataLoader(ds, num_workers=cls._num_workers, pin_memory=True)
+        return _CustomDataLoader(ds)
 
 if __name__ == "__main__":
     i = SplitTinyImagenet()
