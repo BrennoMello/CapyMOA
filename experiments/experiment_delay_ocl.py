@@ -63,6 +63,7 @@ def run_experiment(config: dict[str, str | int | float], use_transform: bool = T
             transforms.ToImage(),
             transforms.RGB(),
             transforms.Lambda(ConditionalResize),
+            transforms.ToDtype(torch.float32),
         ])
     else:
         transform = None
@@ -328,6 +329,6 @@ def _save_json_results(
 
 
 if __name__ == "__main__":
-    # run_random_experiments()
-    run_experiments()
+    run_random_experiments()
+    # run_experiments()
     
