@@ -342,9 +342,9 @@ def _batch_train_random(learner: Classifier, batches: List[Tuple[Tensor, Tensor]
     
     xb_selected = xb_join[indices]
     yb_selected = yb_join[indices]
-    print(f'Size random {len(batches)} batches')
-    for batch in batches:
-        print(f'Delay random {batch[3]}')
+    # print(f'Size random {len(batches)} batches')
+    # for batch in batches:
+    #     print(f'Delay random {batch[3]}')
 
     # print(f'Train random ER {len(batches)} batches, {count} instances, selected {n} instances')
     _batch_train(learner, xb_selected, yb_selected, train_task_id )

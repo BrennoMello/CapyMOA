@@ -10,6 +10,7 @@ from ._resnet import (
     resnet110_32x32,
     resnet1202_32x32,
 )
+from ._torch_resnet import resnet18
 
 __all__ = [
     "Perceptron",
@@ -20,4 +21,5 @@ __all__ = [
     "resnet56_32x32",
     "resnet110_32x32",
     "resnet1202_32x32",
+    "resnet18"
 ]
