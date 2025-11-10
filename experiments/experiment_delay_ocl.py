@@ -1,17 +1,26 @@
 from capymoa.ocl.datasets import (
-    SplitMNIST, SplitFashionMNIST, SplitCIFAR10, SplitCIFAR100, SplitTinyImagenet, TinySplitMNIST
-    )
+    _BuiltInCIScenario,
+    SplitMNIST,
+    SplitFashionMNIST,
+    SplitCIFAR10,
+    SplitCIFAR100,
+    SplitTinyImagenet,
+    TinySplitMNIST
+)
 from capymoa.ocl.evaluation import (
-    ocl_train_eval_delayed_loop, ocl_train_eval_mixed_delayed_loop, OCLMetrics
-    )
+    ocl_train_eval_delayed_loop,
+    ocl_train_eval_mixed_delayed_loop,
+    OCLMetrics
+)
 from capymoa.ocl.strategy import (
     ExperienceReplay, ExperienceDelayReplay, ExperienceReplayAsymmetricCrossEntropy,
     GDumb, NCM, SLDA
     )
 from capymoa.ann import (
-    Perceptron, resnet20_32x32
+    Perceptron, resnet20_32x32, resnet18
     )
 from capymoa.classifier import Finetune
+from torchvision.transforms import v2 as transforms
 from plot import plot_multiple, ocl_plot
 import plotly.express as px
 from typing import Dict
@@ -43,27 +52,47 @@ def clean_debug_files():
         if os.path.isfile(file_path):
             os.remove(file_path)
 
-def run_experiment(config: dict[str, str | int | float]):
-    if config["dataset"] == "SplitMNIST":
-        stream = SplitMNIST(num_tasks=config["num_tasks"], shuffle_tasks=True)
-    if config["dataset"] == "SplitFashionMNIST":
-        stream = SplitFashionMNIST(num_tasks=config["num_tasks"], shuffle_tasks=True)
-    if config["dataset"] == "SplitCIFAR10":
-        stream = SplitCIFAR10(num_tasks=config["num_tasks"], shuffle_tasks=True)
-    if config["dataset"] == "SplitCIFAR100":
-        stream = SplitCIFAR100(num_tasks=config["num_tasks"], shuffle_tasks=True)
-    if config["dataset"] == "TinySplitMNIST":
-        stream = TinySplitMNIST(num_tasks=config["num_tasks"], shuffle_tasks=True)
-    if config["dataset"] == "SplitTinyImagenet":
-        stream = SplitTinyImagenet(num_tasks=config["num_tasks"], shuffle_tasks=True)
+def run_experiment(config: dict[str, str | int | float], use_transform: bool = True):
+    def ConditionalResize(img: torch.Tensor):
+        if min(img.shape[1:]) < 32:
+            return transforms.Resize(32)(img)
+        return img
+
+    if use_transform:
+        transform = transforms.Compose([
+            transforms.ToImage(),
+            transforms.RGB(),
+            transforms.Lambda(ConditionalResize),
+            transforms.ToDtype(torch.float32),
+        ])
+    else:
+        transform = None
+    
+    datasets: dict[str, tuple[type[_BuiltInCIScenario], tuple[int, int]]] = {
+        "SplitMNIST": (SplitMNIST, (28, 28)),
+        "SplitFashionMNIST": (SplitFashionMNIST, (28, 28)),
+        "SplitCIFAR10": (SplitCIFAR10, (32, 32)),
+        "SplitCIFAR100": (SplitCIFAR100, (32, 32)),
+        "TinySplitMNIST": (TinySplitMNIST, (28, 28)),
+        "SplitTinyImagenet": (SplitTinyImagenet, (64, 64))
+    }
+    
+    stream = datasets[config["dataset"]][0](
+        num_tasks=config["num_tasks"],
+        shuffle_tasks=True,
+        train_transform=transform,
+        test_transform=transform
+    )
+    img_size = datasets[config["dataset"]][1]
    
     log_task_schedule(stream.task_schedule)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # model = resnet20_32x32(num_classes=stream.schema.get_num_classes() )
     # mlp = Finetune(schema=stream.schema, model=model, device=device)
-    perceptron = Perceptron(schema=stream.schema, hidden_size=config["hidden_size"])
-    mlp = Finetune(schema=stream.schema, model=perceptron, device=device)
+    # model = Perceptron(schema=stream.schema, hidden_size=config["hidden_size"])
+    model = resnet18(schema=stream.schema, img_size=img_size)
+    mlp = Finetune(schema=stream.schema, model=model, device=device)
     
     if config["strategy"] in ["RER", "ER_f", "ER_l", "ER_2B"]:
         learner_experience = ExperienceReplay(
@@ -78,7 +107,7 @@ def run_experiment(config: dict[str, str | int | float]):
     elif config["strategy"] == "ER-ACE":
         learner_experience = ExperienceReplayAsymmetricCrossEntropy(
             schema=stream.schema,
-            model=perceptron,
+            model=model,
             # model=model,
             device=device,
             buffer_size=config["buffer_size"],
@@ -86,7 +115,7 @@ def run_experiment(config: dict[str, str | int | float]):
     elif config["strategy"] == "gdumb":
         learner_experience = GDumb(
             schema=stream.schema,
-            model=perceptron,
+            model=model,
             epochs=1,
             batch_size=config["batch_size"],
             capacity=config["buffer_size"],
@@ -171,9 +200,9 @@ def run_experiments():
     config_repetitions = {
         # "datasets": ["SplitCIFAR100"],
         # "strategies": ["EDR", "ER_f", "ER_2B"],
-        "datasets": ["SplitMNIST", "SplitCIFAR10", "SplitCIFAR100"],
+        # "datasets": ["SplitMNIST", "SplitCIFAR10", "SplitCIFAR100"],
         # "strategies": ["RER", "ER_f", "ER_l", "ER_2B", "ER-ACE"],      
-        # "datasets": ["SplitMNIST"],
+        "datasets": ["SplitMNIST"],
         # "datasets": ["SplitTinyImagenet"],
         "strategies": ["ER-ACE"],
     }
@@ -223,7 +252,7 @@ def run_random_experiments():
         "delay_label": [100],
         # "strategies": ["gdumb", "ncm", "slda"],
         # "strategies": ["RER", "ER_f", "ER_l", "ER_2B", "EDR", "ER-ACE"],
-        "strategies": ["ER-ACE", "RER"],
+        "strategies": ["ER-ACE", "RER", "EDR"],
         "datasets": ["SplitMNIST", "SplitCIFAR10", "SplitCIFAR100", "SplitTinyImagenet"],
     }
     
