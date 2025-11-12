@@ -46,6 +46,8 @@ class GDumb(BatchClassifier, TestTaskAware):
             capacity, schema.get_num_attributes(), torch.Generator().manual_seed(seed)
         )
         self.loss_func = nn.CrossEntropyLoss()
+        #: The device to be used for training.
+        self.device: torch.device = torch.device(device)
 
     def batch_train(self, x: Tensor, y: Tensor) -> None:
         self.coreset.update(x, y)
@@ -78,5 +80,5 @@ class GDumb(BatchClassifier, TestTaskAware):
                 optimizer.step()
 
     def on_test_task(self, task_id: int) -> None:
-        if task_id == 0:
+        if task_id == 0 and self.coreset.count > 0:
             self.gdumb_fit()

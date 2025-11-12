@@ -49,7 +49,7 @@ torch.Size([1, 28, 28])
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Callable, List, Optional, Sequence, Set, Tuple, cast
+from typing import Any, Callable, List, Optional, Sequence, Set, Tuple, Generator, cast
 
 from capymoa.datasets._utils import download_numpy_dataset, TensorDatasetWithTransform
 import torch
@@ -58,17 +58,26 @@ from torch.utils.data import DataLoader, Dataset, TensorDataset, ConcatDataset
 from torchvision import datasets
 from torchvision.transforms import Compose, Normalize, ToTensor
 
-from capymoa.datasets import get_download_dir
+from capymoa.datasets import get_download_dir, download_unpacked
 from capymoa.instance import LabeledInstance
-from capymoa.ocl.util.data import class_incremental_schedule, partition_by_schedule
+from capymoa.ocl.util.data import (
+        class_incremental_schedule, partition_by_schedule, task_free_class_incremental
+    )
 from capymoa.stream import Stream, TorchClassifyStream
 from capymoa.stream._stream import Schema
+
+from json import dump as json_dump, load as json_load
+from PIL import Image, ImageFile
+import numpy as np
+import shutil
+import os
 
 
 _SOURCES = {
     "capymoa_tiny_mnist": "https://www.dropbox.com/scl/fi/ry3mqtic4gr02u8kux5yz/capymoa_tiny_mnist.tar.gz?rlkey=khdrktr0ulmjcpbkbhejwfq36&st=0icbomup&dl=1",
     "CIFAR100-vit_base_patch16_224_augreg_in21k": "https://www.dropbox.com/scl/fi/twk8c21xgs5j13xxmcm7q/CIFAR100-vit_base_patch16_224_augreg_in21k.tar.gz?rlkey=xbg7olp440szekvooenes8dhp&st=cznv0q5t&dl=1",
     "CIFAR10-vit_base_patch16_224_augreg_in21k": "https://www.dropbox.com/scl/fi/adxx5u399klcugqk3xlix/CIFAR10-vit_base_patch16_224_augreg_in21k.tar.gz?rlkey=ozfddbomkyt78oyco3c11hz4f&st=xd24ewmr&dl=1",
+    "TinyImagenet": "http://cs231n.stanford.edu/tiny-imagenet-200.zip"
 }
 
 
@@ -140,6 +149,7 @@ class _BuiltInCIScenario(ABC):
         normalize_features: bool = False,
         preload_test: bool = True,
         preload_train: bool = False,
+        task_option: Optional[str] = None,
     ):
         """Create a new online continual learning datamodule.
 
@@ -192,6 +202,7 @@ class _BuiltInCIScenario(ABC):
                 "Cannot normalize features since mean and std are not defined."
             )
         self.num_tasks = num_tasks
+        self.task_option = task_option
 
         # Set the number of tasks
         generator = torch.Generator().manual_seed(seed)
@@ -206,13 +217,23 @@ class _BuiltInCIScenario(ABC):
         test_dataset = self._download_dataset(
             False, directory, auto_download, test_transform
         )
-        self.train_tasks = partition_by_schedule(
-            train_dataset,
-            self.task_schedule,
-            shuffle=shuffle_data,
-            rng=generator,
-        )
-        self.test_tasks = partition_by_schedule(test_dataset, self.task_schedule)
+        if self.task_option is not None:
+            self.train_tasks = task_free_class_incremental(
+                train_dataset,
+                shuffle=shuffle_data,
+                rng=generator,
+            )
+            self.test_tasks = task_free_class_incremental(test_dataset)
+            print(f"Task-free class-incremental with {len(self.train_tasks)} tasks.")
+        else:
+            self.train_tasks = partition_by_schedule(
+                train_dataset,
+                self.task_schedule,
+                shuffle=shuffle_data,
+                rng=generator,
+            )
+            self.test_tasks = partition_by_schedule(test_dataset, self.task_schedule)
+            print(f"Task-based class-incremental with {len(self.train_tasks)} tasks.")
 
         if preload_train:
             self.train_tasks = self._preload_datasets(self.train_tasks)
@@ -562,3 +583,53 @@ class SplitCIFAR100(_BuiltInCIScenario):
             download=auto_download,
             transform=transform,
         )
+
+
+class _CustomDataLoader(DataLoader):
+    def __getitem__(self, index):
+        return self.dataset[index]
+    
+
+class SplitTinyImagenet(_BuiltInCIScenario):
+    _dataset_key = "tiny-imagenet-200"
+    num_classes = 200
+    default_task_count = 100
+    labels_to_wnids: dict[int, str] = {}
+    # _batch_size = 32
+    _num_workers = 64
+    # mean = []
+    # std = []
+
+    @classmethod
+    def _download_dataset(cls, train, directory, auto_download, transform):
+        try:
+            path = download_unpacked(_SOURCES["TinyImagenet"], get_download_dir())
+            tmp_path = path / cls._dataset_key
+            
+            for file in os.listdir(tmp_path):
+                os.rename(tmp_path/file, path/file)
+            
+            os.rmdir(tmp_path)
+
+            val = path/"val"
+            with open(val/'val_annotations.txt') as v:
+                for fn, lb in (l.strip().split()[:2] for l in v.readlines()):
+                    if not os.path.exists(val/lb):
+                        os.mkdir(val/lb)
+                    os.rename(val/f'images/{fn}', val/lb/fn)
+            
+            os.rmdir(val/"images")
+            shutil.rmtree(path/"test", True)
+        
+        except FileExistsError:
+            path = get_download_dir() / cls._dataset_key
+
+        if train:
+            ds = datasets.ImageFolder(path/"train", transform)
+        else:
+            ds = datasets.ImageFolder(path/"val", transform)
+        
+        return _CustomDataLoader(ds)
+
+if __name__ == "__main__":
+    i = SplitTinyImagenet()

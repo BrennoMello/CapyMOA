@@ -70,6 +70,49 @@ def get_class_indices(targets: LongTensor) -> dict[int, LongTensor]:
     return indices
 
 
+def task_free_class_incremental(
+    dataset: Dataset[Tuple[torch.Tensor, torch.Tensor]],
+    shuffle: bool = True,
+    rng: torch.Generator = torch.default_generator,
+) -> Sequence[Dataset[Tuple[Tensor, Tensor]]]:
+    """
+    Simulate task-free continual learning by progressively revealing classes.
+
+    :param dataset: Dataset to stream from.
+    :param batch_size: Batch size.
+    :param reveal_rate: Fraction of new classes introduced over time.
+    :param shuffle: Whether to shuffle inside each reveal stage.
+    """
+    """Creates a single, shuffled data stream for task-free continual learning.
+
+    In task-free learning, there are no predefined tasks. The model receives
+    a continuous stream of data where new classes can appear at any time. This
+    function simulates this by shuffling the entire dataset to interleave
+    the classes.
+
+    :param dataset: The dataset to process.
+    :param shuffle: If True, the samples in the stream are shuffled to
+        interleave classes randomly.
+    :param rng: The random number generator used for shuffling, defaults
+        to torch.default_generator
+    :return: A single dataset representing a continuous, task-free data stream.
+    """
+    targets = get_targets(dataset)
+    indices = torch.arange(len(dataset))
+
+    task_datasets = []
+    if shuffle:
+        indices = indices[torch.randperm(indices.numel(), generator=rng)]
+
+    subset = Subset(dataset, cast(Sequence[int], indices))
+    # Optionally, attach targets for convenience in subsequent operations
+    subset.targets = targets[indices]  # type: ignore
+    assert isinstance(subset, Sized)
+    task_datasets.append(subset)
+
+    return task_datasets
+
+
 def partition_by_schedule(
     dataset: Dataset[Tuple[Tensor, Tensor]],
     class_schedule: Sequence[Set[int]],
