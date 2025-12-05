@@ -9,6 +9,7 @@ from ._resnet import (
     resnet56_32x32,
     resnet110_32x32,
     resnet1202_32x32,
+    ResNet18,
 )
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "resnet56_32x32",
     "resnet110_32x32",
     "resnet1202_32x32",
+    "ResNet18",
 ]

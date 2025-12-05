@@ -3,6 +3,7 @@ import os
 import torch
 import numpy as np
 from torch import Tensor, nn
+from torchvision.transforms import v2
 from typing import List, Optional, Tuple, Literal
 
 from capymoa.base import BatchClassifier
@@ -76,6 +77,9 @@ class ExperienceReplay(BatchClassifier, TrainTaskAware, TestTaskAware):
         for _ in range(self.repeat):
             # sample from the buffer and construct training batch
             replay_x, replay_y = self._buffer.sample(x.shape[0])
+            #TODO: refactor shape of buffer sample
+            replay_x = replay_x.view(-1, *self._buffer.original_shape)
+
             train_x = torch.cat((x, replay_x), dim=0)
             train_y = torch.cat((y, replay_y), dim=0)
             train_x = train_x.to(self.learner.device, dtype=self.learner.x_dtype)
@@ -148,7 +152,7 @@ class ExperienceDelayReplay(BatchClassifier, TrainTaskAware, TestTaskAware):
     
     def __init__(
         self, learner: BatchClassifier, buffer_size: int = 200, repeat: int = 1,
-        k: float = 0.01
+        k: float = 0.01, criterion_loss: nn.Module = nn.CrossEntropyLoss()
     ) -> None:
         """Initialize the Experience Replay strategy.
 
@@ -165,6 +169,8 @@ class ExperienceDelayReplay(BatchClassifier, TrainTaskAware, TestTaskAware):
             features=self.schema.get_num_attributes(),
             rng=torch.Generator().manual_seed(learner.random_seed),
         )
+        self.device = learner.device
+        self.criterion_loss = criterion_loss
         self.repeat = repeat
         self._step = 0
         self.k = k
@@ -186,9 +192,22 @@ class ExperienceDelayReplay(BatchClassifier, TrainTaskAware, TestTaskAware):
     def instance_importance(self, true_label, predicted_probs, 
                                 delay, k=0.01):
         # When the loss was bigger than 0.9
-        #loss = 1 - self.categorical_crossentropy(true_label, predicted_probs)
+        # loss = 1 - self.categorical_crossentropy(true_label, predicted_probs)
         # print(f"K value: {k}")
-        loss = self.categorical_crossentropy(true_label, predicted_probs)
+        # loss_old = self.categorical_crossentropy(true_label, predicted_probs)
+
+        if isinstance(predicted_probs, np.ndarray):
+            predicted_probs = torch.from_numpy(predicted_probs).float()
+        
+        true_label = torch.tensor([true_label], dtype=torch.long).to(self.device)
+
+        # Confirm device
+        predicted_probs = predicted_probs.to(self.device)
+        if predicted_probs.dim() == 1:
+            predicted_probs = predicted_probs.unsqueeze(0)
+        
+        #TODO: Develop ACE loss to calculate importance
+        loss = self.criterion_loss(predicted_probs, true_label)
         
         importance = self.penalize_imp(loss, delay, k)
 
@@ -233,15 +252,19 @@ class ExperienceDelayReplay(BatchClassifier, TrainTaskAware, TestTaskAware):
             if delay > 0:
                 # print(f"Batch Delay: {delay}")              
                 for j in range(len(y_)):
-                    y = y_[j].item()
+                    # y = y_[j].item()
+                    y = y_[j]
                     # x = x_[j]
+                    
                     # TODO: Generate one hot encoding for the true label
-                    num_classes = self.schema.get_num_classes()
-                    true_label_one_hot = np.eye(num_classes)[y]
+                    # num_classes = self.schema.get_num_classes()
+                    # true_label_one_hot = np.eye(num_classes)[y]
+                    
                     # predicted_probs = instance[4][j]
                     predicted_probs = yb_pred_proba[j]
 
-                    instance_importance = self.instance_importance(true_label_one_hot, predicted_probs, delay)
+                    instance_importance = self.instance_importance(y, predicted_probs, delay)
+
                     # print(f"Instance importance: {instance_importance}")
                     train_instances.append((x_[j], y, instance_importance))
             else:
@@ -319,7 +342,9 @@ class ExperienceDelayReplay(BatchClassifier, TrainTaskAware, TestTaskAware):
 
             x_ = instance[0]
             y_ = instance[1]
-            x_ = x_.view(x_.shape[0], -1)
+            
+            # x_ = x_.view(x_.shape[0], -1)
+            
             yb_pred_proba = instance[2]
             self._buffer.update(x_, y_)
             delay = instance[3]
@@ -330,13 +355,16 @@ class ExperienceDelayReplay(BatchClassifier, TrainTaskAware, TestTaskAware):
                 for j in range(len(y_)):
                     y = y_[j].item()
                     # x = x_[j]
+                    
                     # TODO: Generate one hot encoding for the true label
-                    num_classes = self.schema.get_num_classes()
-                    true_label_one_hot = np.eye(num_classes)[y]
+                    # num_classes = self.schema.get_num_classes()
+                    # true_label_one_hot = np.eye(num_classes)[y]
+                    
                     # predicted_probs = instance[4][j]
                     predicted_probs = yb_pred_proba[j]
 
-                    instance_importance = self.instance_importance(true_label_one_hot, predicted_probs, delay)
+                    instance_importance = self.instance_importance(y, predicted_probs, delay)
+
                     # print(f"Instance importance: {instance_importance}")
                     train_instances.append((x_[j], y, instance_importance))
             else:
@@ -357,6 +385,7 @@ class ExperienceDelayReplay(BatchClassifier, TrainTaskAware, TestTaskAware):
         
         #####################----------------########################## 
         replay_x, replay_y = self._buffer.sample(batch_size)
+        replay_x = replay_x.view(-1, *self._buffer.original_shape)
         train_x = torch.stack([instance[0] for instance in train_instances], dim=0)
             
         # print(f"Final train instances: {len(train_instances)}")
@@ -379,6 +408,10 @@ class ExperienceDelayReplay(BatchClassifier, TrainTaskAware, TestTaskAware):
         with open(f"debug/train_batches_y_{self.__class__.__name__}.log", "a") as f:
             f.write(f"{train_task_id},{class_counts_str}\n")     
 
+    def batch_predict_logits(self, x: Tensor) -> Tensor:
+        x = x.to(self.learner.device, dtype=self.learner.x_dtype)
+        return self.learner.predict_logits(x)
+    
     def batch_predict_proba(self, x: Tensor) -> Tensor:
         x = x.to(self.learner.device, dtype=self.learner.x_dtype)
         return self.learner.batch_predict_proba(x)
@@ -426,3 +459,120 @@ class ExperienceReplayAsymmetricCrossEntropy(ExperienceReplay):
         learner = Finetune(schema, model, device=device)
         learner.criterion = self.ACELoss(learner.device)
         super().__init__(learner, buffer_size, repeat)
+
+
+
+class ExperienceReplayACE(ExperienceReplay):
+
+    def __init__(
+        self, learner: BatchClassifier, device: Literal['cpu', 'cuda'], 
+        buffer_size: int = 200, use_augs: bool = True,
+        repeat: int = 1
+    ):
+        super().__init__(learner, buffer_size, repeat)
+        self.device = device
+        self.seen_so_far = torch.LongTensor(size=(0,)).to(self.device)
+        self.use_augs = use_augs
+        self.train_tf_init = False 
+        
+    def batch_train(self, x: Tensor, y: Tensor, train_task_id: int) -> None:
+        if not self.train_tf_init:
+            self.train_tf = self._train_transforms(x.shape[2])
+            self.train_tf_init = True
+        
+        for _ in range(self.repeat):
+
+            inc_loss = self.process_inc(x, y, train_task_id)
+
+            re_loss = 0
+            if self._buffer.count > 0:
+                if train_task_id > 0:
+                    replay_x, replay_y = self._buffer.sample(x.shape[0])
+                    replay_x = replay_x.view(-1, *self._buffer.original_shape).to(self.device)
+                    replay_y = replay_y.to(self.device)
+                    re_loss = self.process_re(replay_x, replay_y)
+
+            self.learner.update_learner(inc_loss + re_loss)
+
+        self._buffer.update(x, y)
+
+    def _train_transforms(self, H: Optional[int] = None) -> nn.Module:
+        # num_attributes = self.learner.schema.get_num_attributes()
+        # H = int(math.sqrt(num_attributes))
+               
+        # if self.use_augs:
+        #     tfs = v2.Compose([
+        #         v2.RandomCrop(size=(H, H), padding=4, fill=-1),
+        #         v2.RandomHorizontalFlip(p=0.5),
+        #     ])
+        # else:
+        #     tfs = v2.Identity()
+
+        if self.use_augs:
+            tfs = nn.Sequential(
+                v2.RandomCrop(size=(H, H), padding=4, fill=-1),
+                v2.RandomHorizontalFlip(p=0.5),
+            )
+        else:
+            tfs = nn.Identity()
+
+        return tfs
+
+    def process_re(self, x: Tensor, y: Tensor):
+        """ get a loss signal from data """
+
+        aug_data = self.train_tf(x)
+
+        pred     = self.learner.predict_logits(aug_data)
+        loss     = self.learner.criterion(pred, y)
+        
+        return loss
+
+
+    def process_inc(self, x: Tensor, y: Tensor, train_task_id: int):
+        """ get loss from incoming data """
+
+        aug_data = self.train_tf(x)
+
+        present = y.unique()
+        self.seen_so_far = torch.cat([self.seen_so_far, present]).unique()
+
+        # process data
+        # x = x.view(batch_size, -1)
+        # aug_data = aug_data.view(aug_data.shape[0], -1)
+        logits = self.learner.predict_logits(aug_data)
+        mask   = torch.zeros_like(logits)
+
+        # unmask current classes
+        mask[:, present] = 1
+
+        # unmask unseen classes
+        mask[:, self.seen_so_far.max():] = 1
+
+        if train_task_id > 0:
+            logits  = logits.masked_fill(mask == 0, -1e9)
+
+        loss = self.learner.criterion(logits, y)
+
+        return loss
+
+
+class ACELoss(nn.CrossEntropyLoss):
+    def __init__(self, device, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.seen_so_far = torch.LongTensor(size=(0,)).to(device)
+        
+
+    def forward(self, logits: Tensor, target: Tensor) -> Tensor:
+        present = target.unique()
+        self.seen_so_far = torch.cat([self.seen_so_far, present]).unique()
+
+        mask = torch.zeros_like(logits)
+        mask[:, present] = 1
+        mask[:, self.seen_so_far.max():] = 1
+
+        logits  = logits.masked_fill(mask == 0, -1e9)
+            
+        loss = super().forward(logits, target)
+
+        return loss

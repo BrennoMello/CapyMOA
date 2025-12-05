@@ -55,7 +55,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.nn.init as init
-
+from torchvision import models
 
 def _weights_init(m):
     if isinstance(m, nn.Linear) or isinstance(m, nn.Conv2d):
@@ -206,3 +206,27 @@ def resnet1202_32x32(num_classes: int):
     <https://github.com/akamaster/pytorch_resnet_cifar10>`_.
     """
     return _ResNet(_BasicBlock, [200, 200, 200], num_classes)
+
+
+class ResNet18(nn.Module):
+    def __init__(self, num_classes=10, in_channels=3, weights=None, small_input=False):
+        super().__init__()
+
+        # Load base model
+        self.model = models.resnet18(weights=weights)
+
+        # Adjust input channels (1 for MNIST, 3 for CIFAR/ImageNet)
+        if in_channels != 3:
+            self.model.conv1 = nn.Conv2d(in_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
+
+        # For CIFAR-10/100 or small inputs, adjust early layers
+        if small_input:
+            # Remove large initial downsampling for small 32x32 or 28x28 inputs
+            self.model.conv1 = nn.Conv2d(in_channels, 64, kernel_size=3, stride=1, padding=1, bias=False)
+            self.model.maxpool = nn.Identity()
+
+        # Change the output layer
+        self.model.fc = nn.Linear(self.model.fc.in_features, num_classes)
+
+    def forward(self, x):
+        return self.model(x)

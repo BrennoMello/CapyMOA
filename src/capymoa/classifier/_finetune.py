@@ -101,7 +101,23 @@ class Finetune(BatchClassifier):
         loss.backward()
         self.optimizer.step()
         assert not loss.isnan(), "Loss is NaN"
+    
+    def update_learner(self, loss):
+        """ update parameters from loss """
 
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+
+    def predict_logits(self, x: Tensor) -> Tensor:
+        """Predict the logits of the classes for the given batch of data.
+
+        :param x: Input data of shape (batch_size, num_features).
+        :return: Predicted logits of shape (batch_size, num_classes).
+        """
+        self.model.eval()
+        return self.model(x)
+    
     @torch.no_grad()
     def batch_predict_proba(self, x: Tensor) -> Tensor:
         """Predict the probabilities of the classes for the given batch of data.

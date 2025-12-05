@@ -7,6 +7,7 @@ from typing import List, Optional, Sequence, Tuple, Union
 from capymoa.ocl.strategy import (
         ExperienceReplay, GDumb, NCM, SLDA
     )
+from capymoa.ann import ResNet18
 
 from capymoa.ocl.strategy._experience_replay import ExperienceDelayReplay
 import numpy as np
@@ -295,8 +296,12 @@ _OCLClassifier = Union[TrainTaskAware, TestTaskAware, Classifier]
 def _batch_test(learner: Classifier, x: Tensor) -> np.ndarray:
     """Test a batch of instances using the learner."""
     batch_size = x.shape[0]
-    x = x.view(batch_size, -1)
-    if isinstance(learner, BatchClassifier):
+    if isinstance(learner.learner.model, ResNet18):
+        x = x.to(dtype=learner.x_dtype, device=learner.device)
+        # return learner.batch_predict(x).cpu().detach().numpy(), learner.batch_predict_proba(x).cpu().detach().numpy()
+        return learner.batch_predict(x).cpu().detach().numpy(), learner.batch_predict_logits(x).cpu().detach().numpy()
+    elif isinstance(learner, BatchClassifier):
+        x = x.view(batch_size, -1)
         x = x.to(dtype=learner.x_dtype, device=learner.device)
         return learner.batch_predict(x).cpu().detach().numpy(), learner.batch_predict_proba(x).cpu().detach().numpy()
     else:
@@ -310,15 +315,15 @@ def _batch_test(learner: Classifier, x: Tensor) -> np.ndarray:
 def _batch_train(learner: Classifier, x: Tensor, y: Tensor, train_task_id: int):
     """Train a batch of instances using the learner."""
     batch_size = x.shape[0]
-    x = x.view(batch_size, -1)
-    if isinstance(learner, ExperienceReplay) or isinstance(learner, ExperienceDelayReplay):
-        x = x.to(dtype=learner.x_dtype, device=learner.device)
-        y = y.to(dtype=learner.y_dtype, device=learner.device)
+    x = x.to(dtype=learner.x_dtype, device=learner.device)
+    y = y.to(dtype=learner.y_dtype, device=learner.device)
+    
+    # x = x.view(batch_size, -1)
+    if (isinstance(learner, ExperienceReplay) or 
+        isinstance(learner, ExperienceDelayReplay)):
         
         learner.batch_train(x, y, train_task_id)
     elif isinstance(learner, BatchClassifier):
-        x = x.to(dtype=learner.x_dtype, device=learner.device)
-        y = y.to(dtype=learner.y_dtype, device=learner.device)
         
         learner.batch_train(x, y)
     else:
@@ -429,8 +434,8 @@ def ocl_train_eval_loop(
             xb: Tensor
             yb: Tensor
             pbar.update(1)
-            yb_pred = _batch_test(learner, xb)
-            _batch_train(learner, xb, yb)
+            yb_pred, _ = _batch_test(learner, xb)
+            _batch_train(learner, xb, yb, train_task_id)
             for y, y_pred in zip(yb, yb_pred, strict=True):
                 online_eval.update(y.item(), y_pred)
                 windowed_eval.update(y.item(), y_pred)
@@ -452,7 +457,7 @@ def ocl_train_eval_loop(
                     # predict instances in the current task
                     for test_xb, test_yb in test_stream:
                         pbar.update(1)
-                        yb_pred = _batch_test(learner, test_xb)
+                        yb_pred, _  = _batch_test(learner, test_xb)
 
                         for y, y_pred in zip(test_yb, yb_pred):
                             metrics.holdout_update(
@@ -636,7 +641,7 @@ def ocl_train_eval_delayed_loop(
                     # predict instances in the current task
                     for test_xb, test_yb in test_stream:
                         pbar.update(1)
-                        yb_pred = _batch_test(learner, test_xb)
+                        yb_pred, yb_pred_proba = _batch_test(learner, test_xb)
 
                         for y, y_pred in zip(test_yb, yb_pred):
                             metrics.holdout_update(
@@ -802,10 +807,11 @@ def ocl_train_eval_mixed_delayed_loop(
                             _batch_train(learner, batches_instances[0][0], batches_instances[0][1], train_task_id)
                         elif (
                             er_strategy == "ER_2B"
-                            or er_strategy == "ER-ACE"
                             or er_strategy == "gdumb"
                             or er_strategy == "ncm"
                             or er_strategy == "slda"
+                            or er_strategy == "ER-ACE"
+                            or er_strategy == "ER-ACE-Agu"
                         ):
                             batches_instances = sorted(batches_instances, key=lambda x: x[3], reverse=True)
                             selected_batch = batches_instances[0]
@@ -818,7 +824,7 @@ def ocl_train_eval_mixed_delayed_loop(
 
                     else:
                         # print("EDR learner")
-                        #TODO: train ER equals train ER 
+                        #TODO: train ER with label delay equals train ER 
                         #TODO: train random ER to select instances and EDR with importance sampling
                         _batch_mixed_delayed_train(learner, batches_instances, train_task_id)
                         
@@ -846,7 +852,7 @@ def ocl_train_eval_mixed_delayed_loop(
                     # predict instances in the current task
                     for test_xb, test_yb in test_stream:
                         pbar.update(1)
-                        yb_pred = _batch_test(learner, test_xb)
+                        yb_pred, yb_pred_proba = _batch_test(learner, test_xb)
 
                         for y, y_pred in zip(test_yb, yb_pred):
                             metrics.holdout_update(

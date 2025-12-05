@@ -1,18 +1,21 @@
+from capymoa.ann._resnet import ResNet18
 from capymoa.ocl.datasets import (
     SplitMNIST, SplitFashionMNIST, SplitCIFAR10, SplitCIFAR100, SplitTinyImagenet, TinySplitMNIST
     )
 from capymoa.ocl.evaluation import (
-    ocl_train_eval_delayed_loop, ocl_train_eval_mixed_delayed_loop, OCLMetrics
+    ocl_train_eval_delayed_loop, ocl_train_eval_mixed_delayed_loop, 
+    OCLMetrics, ocl_train_eval_loop
     )
 from capymoa.ocl.strategy import (
-    ExperienceReplay, ExperienceDelayReplay, ExperienceReplayAsymmetricCrossEntropy,
+    ExperienceReplay, ExperienceDelayReplay, ExperienceReplayACE,
+    ExperienceReplayAsymmetricCrossEntropy, ACELoss,
     GDumb, NCM, SLDA
     )
 from capymoa.ann import (
-    Perceptron, resnet20_32x32
+    Perceptron, ResNet18
     )
-from capymoa.classifier import Finetune
 from plot import plot_multiple, ocl_plot
+from capymoa.classifier import Finetune
 import plotly.express as px
 from typing import Dict
 import pandas as pd
@@ -44,6 +47,8 @@ def clean_debug_files():
             os.remove(file_path)
 
 def run_experiment(config: dict[str, str | int | float]):
+    if config["dataset"] == "TinySplitMNIST":
+        stream = TinySplitMNIST(num_tasks=config["num_tasks"], shuffle_tasks=True)
     if config["dataset"] == "SplitMNIST":
         stream = SplitMNIST(num_tasks=config["num_tasks"], shuffle_tasks=True)
     if config["dataset"] == "SplitFashionMNIST":
@@ -52,41 +57,64 @@ def run_experiment(config: dict[str, str | int | float]):
         stream = SplitCIFAR10(num_tasks=config["num_tasks"], shuffle_tasks=True)
     if config["dataset"] == "SplitCIFAR100":
         stream = SplitCIFAR100(num_tasks=config["num_tasks"], shuffle_tasks=True)
-    if config["dataset"] == "TinySplitMNIST":
-        stream = TinySplitMNIST(num_tasks=config["num_tasks"], shuffle_tasks=True)
     if config["dataset"] == "SplitTinyImagenet":
         stream = SplitTinyImagenet(num_tasks=config["num_tasks"], shuffle_tasks=True)
+    #TODO: add Mini Imagenet
    
     log_task_schedule(stream.task_schedule)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    # model = resnet20_32x32(num_classes=stream.schema.get_num_classes() )
-    # mlp = Finetune(schema=stream.schema, model=model, device=device)
-    perceptron = Perceptron(schema=stream.schema, hidden_size=config["hidden_size"])
-    mlp = Finetune(schema=stream.schema, model=perceptron, device=device)
-    
+    if config["model"] == "resnet18":
+        if config["dataset"] == "SplitMNIST" or config["dataset"] == "SplitFashionMNIST":
+            ann = ResNet18(num_classes=stream.schema.get_num_classes(), 
+                                in_channels=1, weights=None, small_input=True)
+        elif config["dataset"] == "SplitTinyImagenet":
+            ann = ResNet18(num_classes=stream.schema.get_num_classes(), 
+                                in_channels=3, weights=None, small_input=False)
+        else:
+            ann = ResNet18(num_classes=stream.schema.get_num_classes(), 
+                                in_channels=3, weights=None, small_input=True)
+    else:        
+        ann = Perceptron(schema=stream.schema, hidden_size=config["hidden_size"])
+
+    finetune = Finetune(schema=stream.schema, model=ann, device=device)
+
     if config["strategy"] in ["RER", "ER_f", "ER_l", "ER_2B"]:
         learner_experience = ExperienceReplay(
-            learner=mlp,
+            learner=finetune,
             buffer_size=config["buffer_size"]
         )
     elif config["strategy"] == "EDR":
         learner_experience = ExperienceDelayReplay(
-            learner=mlp,
+            learner=finetune,
+            buffer_size=config["buffer_size"],
+        )
+    elif config["strategy"] == "EDR-ACE":
+        finetune_ace = Finetune(schema=stream.schema, 
+                                model=ann, criterion=ACELoss(device=device), 
+                                device=device)
+        learner_experience = ExperienceDelayReplay(
+            learner=finetune_ace,
+            buffer_size=config["buffer_size"],
+            #criterion_loss=ACELoss(device=device)
+        )
+    elif config["strategy"] == "ER-ACE-Agu":
+        learner_experience = ExperienceReplayACE(
+            learner=finetune,
+            device=device,
             buffer_size=config["buffer_size"],
         )
     elif config["strategy"] == "ER-ACE":
-        learner_experience = ExperienceReplayAsymmetricCrossEntropy(
-            schema=stream.schema,
-            model=perceptron,
-            # model=model,
+        learner_experience = ExperienceReplayACE(
+            learner=finetune,
             device=device,
+            use_augs=False,
             buffer_size=config["buffer_size"],
         )
     elif config["strategy"] == "gdumb":
         learner_experience = GDumb(
             schema=stream.schema,
-            model=perceptron,
+            model=finetune,
             epochs=1,
             batch_size=config["batch_size"],
             capacity=config["buffer_size"],
@@ -104,19 +132,29 @@ def run_experiment(config: dict[str, str | int | float]):
     else:
         raise ValueError(f"Strategy {config['strategy']} not recognized.")
     
-    return ocl_train_eval_mixed_delayed_loop(
-        learner_experience,
-        stream.train_loaders(batch_size=config["batch_size"]),
-        stream.test_loaders(batch_size=config["batch_size"]),
-        continual_evaluations=config["continual_evaluations"],
-        progress_bar=True,  
-        eval_window_size=config["eval_window_size"],
-        delayed_batches=config["delay_label"],
-        select_tasks=config["select_tasks"],
-        number_delayed_batches=config["number_delayed_batches"],
-        prob_no_delay_batches=config["prob_no_delay_batches"],
-        er_strategy=config["strategy"]
-    )
+    if config["delay_label"] != 0:
+        return ocl_train_eval_mixed_delayed_loop(
+            learner_experience,
+            stream.train_loaders(batch_size=config["batch_size"]),
+            stream.test_loaders(batch_size=config["batch_size"]),
+            continual_evaluations=config["continual_evaluations"],
+            progress_bar=True,  
+            eval_window_size=config["eval_window_size"],
+            delayed_batches=config["delay_label"],
+            select_tasks=config["select_tasks"],
+            number_delayed_batches=config["number_delayed_batches"],
+            prob_no_delay_batches=config["prob_no_delay_batches"],
+            er_strategy=config["strategy"]
+        )  
+    else:
+        return ocl_train_eval_loop(
+            learner_experience,
+            stream.train_loaders(batch_size=config["batch_size"]),
+            stream.test_loaders(batch_size=config["batch_size"]),
+            continual_evaluations=config["continual_evaluations"],
+            progress_bar=True,  
+            eval_window_size=config["eval_window_size"],
+        ) 
 
 def plot_task_results(results, config):
     plots = ocl_plot(
@@ -213,17 +251,70 @@ def run_experiments():
 
         plot_online_accuracy(results, config)
 
+def run_random_no_delayed_experiments():
+    #TODO: ER with additional loss based of ER-ACE
+    config_repetitions = {
+        "repetitions": 30,
+        # "strategies": ["gdumb", "ncm", "slda"],
+        # "strategies": ["EDR", "RER", "ER_f", "ER_l", "ER_2B", "ER-ACE", "ER-ACE-Agu"],
+        "strategies": ["ER-ACE-Agu", "ER-ACE"],
+        # "datasets": ["SplitMNIST", "SplitFashionMNIST", "SplitCIFAR10", "SplitCIFAR100", "SplitTinyImagenet"],
+        "datasets": ["SplitCIFAR10"],
+    }
+    
+    config = {
+        "batch_size": 10,
+        "buffer_size": 100,
+        "num_tasks": 5,
+        "hidden_size": 64,
+        "eval_window_size": 128,
+        "continual_evaluations": 5,
+        "acc_seen": False,
+        "select_tasks": [],
+        "no_delayed_tasks": [],
+        "delay_label": 0,
+        "prob_no_delay_batches": 0.0,  
+        "start_delay_size": 0,
+        "number_delayed_batches": 1,
+        "model" : "resnet18",
+    }
+    
+    for dataset in config_repetitions["datasets"]:       
+        config["dataset"] = dataset
+        if dataset == "SplitCIFAR100":
+            config["num_tasks"] = 20
+        if dataset == "SplitTinyImagenet":
+            config["num_tasks"] = 20
+        
+        for strategy in config_repetitions["strategies"]:
+            config["strategy"] = strategy
+            
+            for repetition in range(config_repetitions["repetitions"]):
+                set_seed(424242+repetition)
+                config["seed"] = 424242+repetition
+                
+                print(f'Running {dataset} - {strategy} - repetition {repetition+1}/{config_repetitions["repetitions"]}')
+                results_repetition = run_experiment(config)
+                _save_json_results(
+                    config["dataset"],  config["delay_label"], config["prob_no_delay_batches"], config["batch_size"], 
+                    config["num_tasks"], config["strategy"], config["hidden_size"], config["eval_window_size"], 
+                    config["continual_evaluations"], config["number_delayed_batches"], results_repetition, repetition
+                    )
+                plot_task_results(results_repetition, config)
+
 def run_random_experiments():
     
+    #TODO: ER with additional loss based of ER-ACE
     config_repetitions = {
-        "repetitions": 2,
+        "repetitions": 30,
         # "no_delayed_batches": [0.1, 0.2, 0.3, 0.4],
         "no_delayed_batches": [0.4],
         # "delay_label": [10, 50, 80, 100],
         "delay_label": [100],
         # "strategies": ["gdumb", "ncm", "slda"],
-        # "strategies": ["RER", "ER_f", "ER_l", "ER_2B", "EDR", "ER-ACE"],
-        "strategies": ["ER-ACE"],
+        # "strategies": ["EDR", "RER", "ER_f", "ER_l", "ER_2B", "ER-ACE", "ER-ACE-Agu"],
+        "strategies": ["EDR-ACE"],
+        # "datasets": ["SplitMNIST", "SplitFashionMNIST", "SplitCIFAR10", "SplitCIFAR100", "SplitTinyImagenet"],
         "datasets": ["SplitMNIST", "SplitFashionMNIST", "SplitCIFAR10", "SplitCIFAR100"],
     }
     
@@ -239,10 +330,15 @@ def run_random_experiments():
         "no_delayed_tasks": [],  
         "start_delay_size": 0,
         "number_delayed_batches": 1,
+        "model" : "resnet18",
     }
     
     for dataset in config_repetitions["datasets"]:       
         config["dataset"] = dataset
+        if dataset == "SplitCIFAR100":
+            config["num_tasks"] = 20
+        if dataset == "SplitTinyImagenet":
+            config["num_tasks"] = 20
         
         for delay in config_repetitions["delay_label"]:
             config["delay_label"] = delay
@@ -300,6 +396,21 @@ def _save_json_results(
 
 
 if __name__ == "__main__":
+    # TODO: 
+    # - Implement experiments mini-imagenet dataset
+    # - Implement FLOPs calculation during training and evaluation
+    # - Implement additional baselines: ER-ACE,  DER++, SER, CLS-ER etc
+    # - Implement additional strategies suggested by reviewers: OCM [B], GSA [C], MOSE [D], and CCLDC [E]
+    # [A] Csaba, Botos, et al. "Label delay in online continual learning." Advances in Neural Information Processing Systems 37 (2024): 119976-120012.
+    # [B] Guo, Yiduo, Bing Liu, and Dongyan Zhao. "Online continual learning through mutual information maximization." International Conference on Machine Learning. PMLR, 2022.
+    # [C] Guo, Yiduo, Bing Liu, and Dongyan Zhao. "Dealing with cross-task class discrimination in online continual learning." Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition. 2023.
+    # [D] Yan, Hongwei, et al. "Orchestrate latent expertise: Advancing online continual learning with multi-level supervision and reverse self-distillation." Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition. 2024.
+    # [E] Wang, Maorong, et al. "Improving plasticity in online continual learning via collaborative learning." Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition. 2024.
+    # - Implement additional metrics: forgetting, backward transfer, forward transfer
+    # - Implement ViT backbone model
+    # - Implement command line interface for running experiments with different configurations
+   
     run_random_experiments()
+    # run_random_no_delayed_experiments()
     # run_experiments()
     

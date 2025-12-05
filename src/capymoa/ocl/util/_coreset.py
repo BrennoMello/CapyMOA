@@ -63,7 +63,11 @@ class ReservoirSampler(Coreset):
     def update(self, x: Tensor, y: Tensor) -> None:
         x = x.to(self.device)
         y = y.to(self.device)
+
         batch_size = x.shape[0]
+        self.original_shape = x.shape[1:]
+        x = x.view(batch_size, self._features).to(self.device)
+        
         assert x.shape == (
             batch_size,
             self._features,
