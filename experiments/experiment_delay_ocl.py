@@ -399,7 +399,7 @@ if __name__ == "__main__":
     # TODO: 
     # - Implement experiments mini-imagenet dataset
     # - Implement FLOPs calculation during training and evaluation
-    # - Implement additional baselines: ER-ACE,  DER++, SER, CLS-ER etc
+    # - Implement additional baselines: ER-ACE,  DER++, SER, CLS-ER, RAR
     # - Implement additional strategies suggested by reviewers: OCM [B], GSA [C], MOSE [D], and CCLDC [E]
     # [A] Csaba, Botos, et al. "Label delay in online continual learning." Advances in Neural Information Processing Systems 37 (2024): 119976-120012.
     # [B] Guo, Yiduo, Bing Liu, and Dongyan Zhao. "Online continual learning through mutual information maximization." International Conference on Machine Learning. PMLR, 2022.

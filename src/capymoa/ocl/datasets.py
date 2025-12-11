@@ -614,3 +614,30 @@ class SplitTinyImagenet(_BuiltInCIScenario):
             ds = datasets.ImageFolder(path/"val", transform)
         
         return _CustomDataLoader(ds)
+
+class SplitMiniImagenet(_BuiltInCIScenario):
+    """Split MiniImagenet dataset for online class incremental learning.
+
+    **References:**
+
+    #
+    """
+    num_classes = 100
+    default_task_count = 10
+    mean = []
+    std = []
+
+    @classmethod
+    def _download_dataset(
+        cls,
+        train: bool,
+        directory: Path,
+        auto_download: bool,
+        transform: Optional[Any],
+    ) -> Dataset[Tuple[Tensor, Tensor]]:
+        return datasets.ImageNet(
+            directory,
+            train=train,
+            download=auto_download,
+            transform=transform,
+        )
