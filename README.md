@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Official implementation of the paper:  
-**“Look Back to Move Forward: Delay-Aware Instance Selection for Online Continual Learning”** – Accepted at XXXX.  
+**“Efficient Delay-Aware Experience Replay for Online Continual Learning under Delayed Label Streams”** – Accepted at XXXX.  
 
 ---
 
