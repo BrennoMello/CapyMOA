@@ -1,4 +1,4 @@
-# Look Back to Move Forward: Delay-Aware Instance Selection for Online Continual Learning
+# Efficient Delay-Aware Experience Replay for Online Continual Learning under Delayed Label Streams
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
