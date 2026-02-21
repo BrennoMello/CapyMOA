@@ -588,6 +588,12 @@ class SplitCIFAR100(_BuiltInCIScenario):
             transform=transform,
         )
 
+
+class _CustomDataLoader(DataLoader):
+    def __getitem__(self, index):
+        return self.dataset[index]
+    
+
 class SplitTinyImagenet(_BuiltInCIScenario):
     _dataset_key = "tiny-imagenet-200"
     num_classes = 200
