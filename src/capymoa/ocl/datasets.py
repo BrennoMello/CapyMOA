@@ -56,7 +56,8 @@ import torch
 from torch import Tensor
 from torch.utils.data import DataLoader, Dataset, TensorDataset, ConcatDataset
 from torchvision import datasets
-from torchvision.transforms import Compose, Normalize, ToTensor
+from torchvision.datasets import ImageFolder
+from torchvision.transforms import Compose, v2, Normalize, ToTensor
 
 from capymoa.datasets import get_download_dir, download_unpacked
 from capymoa.instance import LabeledInstance
@@ -68,7 +69,10 @@ from capymoa.stream._stream import Schema
 
 from json import dump as json_dump, load as json_load
 from PIL import Image, ImageFile
+import pandas as pd
 import numpy as np
+import requests
+import zipfile
 import shutil
 import os
 
@@ -77,7 +81,8 @@ _SOURCES = {
     "capymoa_tiny_mnist": "https://www.dropbox.com/scl/fi/ry3mqtic4gr02u8kux5yz/capymoa_tiny_mnist.tar.gz?rlkey=khdrktr0ulmjcpbkbhejwfq36&st=0icbomup&dl=1",
     "CIFAR100-vit_base_patch16_224_augreg_in21k": "https://www.dropbox.com/scl/fi/twk8c21xgs5j13xxmcm7q/CIFAR100-vit_base_patch16_224_augreg_in21k.tar.gz?rlkey=xbg7olp440szekvooenes8dhp&st=cznv0q5t&dl=1",
     "CIFAR10-vit_base_patch16_224_augreg_in21k": "https://www.dropbox.com/scl/fi/adxx5u399klcugqk3xlix/CIFAR10-vit_base_patch16_224_augreg_in21k.tar.gz?rlkey=ozfddbomkyt78oyco3c11hz4f&st=xd24ewmr&dl=1",
-    "TinyImagenet": "http://cs231n.stanford.edu/tiny-imagenet-200.zip"
+    "TinyImagenet": "http://cs231n.stanford.edu/tiny-imagenet-200.zip",
+    "MiniImageNet": "https://www.kaggle.com/api/v1/datasets/download/ctrnngtrung/miniimagenet" 
 }
 
 
@@ -346,6 +351,7 @@ class SplitMNIST(_BuiltInCIScenario):
     default_task_count = 5
     mean = [0.1307]
     std = [0.3081]
+    shape = [1, 28, 28]
 
     @classmethod
     def _download_dataset(
@@ -383,6 +389,7 @@ class TinySplitMNIST(_BuiltInCIScenario):
     default_train_transform = None
     default_test_transform = None
     _dataset_key = "capymoa_tiny_mnist"
+    shape = [1, 16, 16]
 
     @classmethod
     def _download_dataset(
@@ -432,6 +439,7 @@ class SplitCIFAR100ViT(_BuiltInCIScenario):
     default_task_count = 10
     default_train_transform = None
     default_test_transform = None
+    shape = [768]
     _dataset_key = "CIFAR100-vit_base_patch16_224_augreg_in21k"
 
     @classmethod
@@ -482,6 +490,7 @@ class SplitCIFAR10ViT(SplitCIFAR100ViT):
 
     num_classes = 10
     default_task_count = 5
+    shape = [768]
 
 
 class SplitFashionMNIST(_BuiltInCIScenario):
@@ -497,6 +506,7 @@ class SplitFashionMNIST(_BuiltInCIScenario):
     default_task_count = 5
     mean = [0.286]
     std = [0.353]
+    shape = [1, 28, 28]
 
     @classmethod
     def _download_dataset(
@@ -527,6 +537,7 @@ class SplitCIFAR10(_BuiltInCIScenario):
     default_task_count = 5
     mean = [0.491, 0.482, 0.447]
     std = [0.247, 0.243, 0.262]
+    shape = [3, 32, 32]
 
     @classmethod
     def _download_dataset(
@@ -560,6 +571,7 @@ class SplitCIFAR100(_BuiltInCIScenario):
     default_task_count = 10
     mean = [0.507, 0.487, 0.441]
     std = [0.267, 0.256, 0.276]
+    shape = [3, 32, 32]
 
     @classmethod
     def _download_dataset(
@@ -624,8 +636,11 @@ class SplitMiniImagenet(_BuiltInCIScenario):
     """
     num_classes = 100
     default_task_count = 10
-    mean = []
-    std = []
+    mean = [0.485, 0.456, 0.406]  
+    std = [0.229, 0.224, 0.225]  
+    default_train_transform = v2.Compose([v2.Resize((244, 244)), v2.ToImage(), v2.ToDtype(torch.float32, scale=True)])
+    default_test_transform = v2.Compose([v2.Resize((244, 244)), v2.ToImage(), v2.ToDtype(torch.float32, scale=True)])
+    shape = [3, 244, 244]
 
     @classmethod
     def _download_dataset(
@@ -635,9 +650,44 @@ class SplitMiniImagenet(_BuiltInCIScenario):
         auto_download: bool,
         transform: Optional[Any],
     ) -> Dataset[Tuple[Tensor, Tensor]]:
-        return datasets.ImageNet(
-            directory,
-            train=train,
-            download=auto_download,
-            transform=transform,
-        )
+        
+        if 'imagenet' not in os.listdir(directory):
+            cls._download_and_extract(_SOURCES["MiniImageNet"], directory)
+
+        if train:
+            train = Dataset(directory/"imagenet/train", transform = transform)
+            
+            return train
+        else:
+            test = Dataset(directory/"imagenet/test", transform = transform)
+            
+            return test
+
+    def _download_and_extract(self, url, extract_to):
+        """Download the zip file and extract it."""
+        
+        zip_path = extract_to / "imagenet.zip"
+        extract_to.mkdir(parents=True, exist_ok=True)
+        
+        print("Downloading ImageNet from Kaggle...")
+        response = requests.get(url, stream=True)
+        response.raise_for_status()
+        
+        with open(zip_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+        
+        print("Extracting...")
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            zip_ref.extractall(extract_to)
+        
+        os.remove(zip_path)
+        print("Done. Files extracted to:", extract_to)
+
+    
+class Dataset(ImageFolder):
+    def __init__(self, path, transform=None):
+        super().__init__(path, transform=transform)
+        self.path = path
+        path_idx2label = pd.read_csv(os.path.join(self.path, '..', 'map_clsloc.txt'), sep=' ', header=None)
+        self.idx2label = dict(zip(path_idx2label[0], path_idx2label[1]))

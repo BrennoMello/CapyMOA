@@ -5,11 +5,12 @@ import os
 from typing import List, Optional, Sequence, Tuple, Union
 
 from capymoa.ocl.strategy import (
-        ExperienceReplay, GDumb, NCM, SLDA
+        ExperienceReplay, GDumb, NCM, SLDA, RAR
     )
 from capymoa.ann import ResNet18
 
-from capymoa.ocl.strategy._experience_replay import ExperienceDelayReplay
+from capymoa.ocl.strategy import ACELoss, ExperienceDelayReplay
+from torchprofile import profile_macs
 import numpy as np
 import torch
 from torch import Tensor
@@ -142,6 +143,13 @@ class OCLMetrics:
 
        r_\text{BWT} = \frac{2}{T(T-1)} \sum_{i=2}^{T} \sum_{j=1}^{i-1} (R_{i,j} - R_{j,j})
     """
+    
+    forgetting: float
+    r"""A scalar measuring how much the learner has forgotten previous tasks."""
+
+    total_flops: float
+    r"""Total floating point operations (FLOPs) used during training."""
+
     accuracy_matrix: np.ndarray
     r"""A matrix measuring the accuracy on each task after training on each task.
     
@@ -165,6 +173,18 @@ class OCLMetrics:
     Useful as the ``x`` axis for
     :attr:`capymoa.evaluation.results.PrequentialResults.windowed`.
     """
+
+def _forgetting(R: torch.Tensor) -> float:
+
+    T = R.size(0)
+    forgetting = []
+
+    for j in range(T - 1):
+        best = R[j:, j].max()
+        final = R[T - 1, j]
+        forgetting.append(best - final)
+
+    return torch.stack(forgetting).mean().item()
 
 
 def _backwards_transfer(R: torch.Tensor) -> float:
@@ -228,7 +248,7 @@ class _OCLEvaluator:
         # TODO: handle missing predictions
 
     def build(
-        self, ttt: PrequentialResults, boundary_instances: torch.Tensor
+        self, ttt: PrequentialResults, boundary_instances: torch.Tensor, total_flops: float
     ) -> OCLMetrics:
         """Creates metrics using collected statistics."""
         correct = self.cm.diagonal(dim1=3, dim2=4).sum(-1)
@@ -284,6 +304,8 @@ class _OCLEvaluator:
             anytime_accuracy_matrix=anytime_acc.flatten(end_dim=1).numpy(),
             backward_transfer=_backwards_transfer(accuracy_matrix),
             forward_transfer=_forwards_transfer(accuracy_matrix),
+            forgetting=_forgetting(accuracy_matrix),
+            total_flops=total_flops,
             ttt=ttt,
             boundaries=boundaries,
             ttt_windowed_task_index=ttt_windowed_task_index,
@@ -292,12 +314,33 @@ class _OCLEvaluator:
 
 _OCLClassifier = Union[TrainTaskAware, TestTaskAware, Classifier]
 
-
 def _batch_test(learner: Classifier, x: Tensor) -> np.ndarray:
     """Test a batch of instances using the learner."""
     batch_size = x.shape[0]
     if isinstance(learner.learner.model, ResNet18):
         x = x.to(dtype=learner.x_dtype, device=learner.device)
+        # if isinstance(learner.learner.criterion, ACELoss):
+        #     return learner.batch_predict(x).cpu().detach().numpy(), learner.batch_predict_logits(x).cpu().detach().numpy()
+        
+        return learner.batch_predict(x).cpu().detach().numpy(), learner.batch_predict_proba(x).cpu().detach().numpy() 
+    elif isinstance(learner, BatchClassifier):
+        x = x.view(batch_size, -1)
+        x = x.to(dtype=learner.x_dtype, device=learner.device)
+
+        return learner.batch_predict(x).cpu().detach().numpy(), learner.batch_predict_proba(x).cpu().detach().numpy()
+    else:
+        yb_pred = np.zeros(batch_size, dtype=int)
+        for i in range(batch_size):
+            instance = Instance.from_array(learner.schema, x[i].numpy())
+            yb_pred[i] = learner.predict(instance)
+        return yb_pred
+
+def _batch_test_old(learner: Classifier, x: Tensor) -> np.ndarray:
+    """Test a batch of instances using the learner."""
+    batch_size = x.shape[0]
+    if isinstance(learner.learner.model, ResNet18):
+        x = x.to(dtype=learner.x_dtype, device=learner.device)
+        
         # return learner.batch_predict(x).cpu().detach().numpy(), learner.batch_predict_proba(x).cpu().detach().numpy()
         return learner.batch_predict(x).cpu().detach().numpy(), learner.batch_predict_logits(x).cpu().detach().numpy()
     elif isinstance(learner, BatchClassifier):
@@ -485,6 +528,7 @@ def ocl_train_eval_loop(
             cpu_time=elapsed_cpu_time,
         ),
         boundary_instances,
+        total_flops=0.0,
     )
 
 
@@ -496,7 +540,6 @@ def ocl_train_eval_delayed_loop(
     progress_bar: bool = False,
     eval_window_size: int = 1000,
     delay_label: Optional[int] = None,
-    delay_batches: Optional[bool] = None,
     select_tasks: Optional[List[int]] = None,
     no_delayed_tasks: Optional[List[int]] = None,
     start_delay_size: Optional[int] = None,
@@ -607,7 +650,8 @@ def ocl_train_eval_delayed_loop(
                         # print(f'Batch Delay {delay_label + number_delayed_batches}')
                         # for instance in batches_instances:
                         # _batch_train(learner, batches_instances[0][0], batches_instances[0][1], train_task_id)
-                        _batch_train_random(learner, batches_instances, train_task_id)
+                        # _batch_train_random(learner, batches_instances, train_task_id)
+                        _batch_train(learner, batches_instances[0][0], batches_instances[0][1], train_task_id)
                     else:
                         # print("EDR learner")
                         #TODO: train ER equals train ER 
@@ -624,7 +668,6 @@ def ocl_train_eval_delayed_loop(
                 windowed_eval.update(y.item(), y_pred)
 
             # Evaluate the learner on evenly spaced steps during training
-            # 
             evaluate_every = len(train_stream) // continual_evaluations
             if (step + 1) % evaluate_every == 0:
                 eval_step = step // evaluate_every
@@ -683,7 +726,8 @@ def ocl_train_eval_mixed_delayed_loop(
     select_tasks: Optional[List[int]] = None,
     number_delayed_batches: int = 1,
     prob_no_delay_batches: float = 0.5,
-    er_strategy: str = "ER"
+    er_strategy: str = "ER",
+    track_flops: bool = False,
 ) -> OCLMetrics:
     """Train and evaluate a learner on a sequence of tasks.
 
@@ -747,6 +791,9 @@ def ocl_train_eval_mixed_delayed_loop(
         desc="Train & Eval",
     )
     
+    # Initialize FLOP counter
+    total_flops = 0.0
+
     train_batches_delayed = list()
     train_batches_no_delay = list()
     # Iterate over each task
@@ -783,6 +830,7 @@ def ocl_train_eval_mixed_delayed_loop(
                         _log_batches_train(learner, b[1], train_task_id, step)
 
                     if (isinstance(learner, ExperienceReplay) or
+                        isinstance(learner, RAR) or
                         isinstance(learner, GDumb) or
                         isinstance(learner, NCM) or
                         isinstance(learner, SLDA)):
@@ -812,6 +860,7 @@ def ocl_train_eval_mixed_delayed_loop(
                             or er_strategy == "slda"
                             or er_strategy == "ER-ACE"
                             or er_strategy == "ER-ACE-Agu"
+                            or er_strategy == "RAR"
                         ):
                             batches_instances = sorted(batches_instances, key=lambda x: x[3], reverse=True)
                             selected_batch = batches_instances[0]
@@ -827,7 +876,19 @@ def ocl_train_eval_mixed_delayed_loop(
                         #TODO: train ER with label delay equals train ER 
                         #TODO: train random ER to select instances and EDR with importance sampling
                         _batch_mixed_delayed_train(learner, batches_instances, train_task_id)
-                        
+
+                    if track_flops:
+                        model = learner.learner.model
+                        model.eval()
+                        with torch.no_grad():
+                            trained_input = batches_instances[0][0].to(device=learner.learner.device, dtype=learner.learner.x_dtype)
+                            # Use torchprofile for FLOP counting
+                            macs = profile_macs(model, trained_input)
+                            flops_forward = 2 * macs  # Approximate FLOPs as 2 * MACs
+                            flops_backward = 3 * flops_forward  # Approximation
+                            total_flops += flops_forward + flops_backward
+                        model.train()
+
                 else:
                     train_batches_delayed.append((xb, yb, yb_pred_proba, delayed_batches + number_delayed_batches))
 
@@ -880,6 +941,7 @@ def ocl_train_eval_mixed_delayed_loop(
             cpu_time=elapsed_cpu_time,
         ),
         boundary_instances,
+        total_flops=total_flops,
     )
 
 def _log_batches_train(learner, train_y: Tensor, train_task_id: int, stream_id: int):

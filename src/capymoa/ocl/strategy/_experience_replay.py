@@ -556,23 +556,38 @@ class ExperienceReplayACE(ExperienceReplay):
 
         return loss
 
+class ER_ACE(ExperienceReplay):
+    def __init__(self, learner, buffer_size = 200, repeat = 1):
+        super().__init__(learner, buffer_size, repeat)
 
 class ACELoss(nn.CrossEntropyLoss):
     def __init__(self, device, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.seen_so_far = torch.LongTensor(size=(0,)).to(device)
-        
 
     def forward(self, logits: Tensor, target: Tensor) -> Tensor:
         present = target.unique()
         self.seen_so_far = torch.cat([self.seen_so_far, present]).unique()
 
         mask = torch.zeros_like(logits)
-        mask[:, present] = 1
-        mask[:, self.seen_so_far.max():] = 1
-
+        mask[:, self.seen_so_far] = 1
+        
         logits  = logits.masked_fill(mask == 0, -1e9)
             
         loss = super().forward(logits, target)
 
-        return loss
+        return loss 
+
+    # def forward(self, logits: Tensor, target: Tensor) -> Tensor:
+    #     present = target.unique()
+    #     self.seen_so_far = torch.cat([self.seen_so_far, present]).unique()
+
+    #     mask = torch.zeros_like(logits)
+    #     mask[:, present] = 1
+    #     mask[:, self.seen_so_far.max():] = 1
+
+    #     logits  = logits.masked_fill(mask == 0, -1e9)
+            
+    #     loss = super().forward(logits, target)
+
+    #     return loss

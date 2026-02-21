@@ -1,6 +1,8 @@
 from capymoa.ann._resnet import ResNet18
 from capymoa.ocl.datasets import (
-    SplitMNIST, SplitFashionMNIST, SplitCIFAR10, SplitCIFAR100, SplitTinyImagenet, TinySplitMNIST
+    SplitMNIST, SplitFashionMNIST, SplitCIFAR10, 
+    SplitCIFAR100, SplitTinyImagenet, TinySplitMNIST,
+    SplitMiniImagenet
     )
 from capymoa.ocl.evaluation import (
     ocl_train_eval_delayed_loop, ocl_train_eval_mixed_delayed_loop, 
@@ -9,7 +11,7 @@ from capymoa.ocl.evaluation import (
 from capymoa.ocl.strategy import (
     ExperienceReplay, ExperienceDelayReplay, ExperienceReplayACE,
     ExperienceReplayAsymmetricCrossEntropy, ACELoss,
-    GDumb, NCM, SLDA
+    GDumb, NCM, SLDA, RAR
     )
 from capymoa.ann import (
     Perceptron, ResNet18
@@ -18,10 +20,12 @@ from plot import plot_multiple, ocl_plot
 from capymoa.classifier import Finetune
 import plotly.express as px
 from typing import Dict
+import torch.nn as nn
 import pandas as pd
 import numpy as np
 import random
 import torch
+
 import glob
 import json
 import os
@@ -59,7 +63,8 @@ def run_experiment(config: dict[str, str | int | float]):
         stream = SplitCIFAR100(num_tasks=config["num_tasks"], shuffle_tasks=True)
     if config["dataset"] == "SplitTinyImagenet":
         stream = SplitTinyImagenet(num_tasks=config["num_tasks"], shuffle_tasks=True)
-    #TODO: add Mini Imagenet
+    if config["dataset"] == "SplitMiniImagenet":
+        stream = SplitMiniImagenet(num_tasks=config["num_tasks"], shuffle_tasks=True)
    
     log_task_schedule(stream.task_schedule)
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -68,7 +73,7 @@ def run_experiment(config: dict[str, str | int | float]):
         if config["dataset"] == "SplitMNIST" or config["dataset"] == "SplitFashionMNIST":
             ann = ResNet18(num_classes=stream.schema.get_num_classes(), 
                                 in_channels=1, weights=None, small_input=True)
-        elif config["dataset"] == "SplitTinyImagenet":
+        elif config["dataset"] == "SplitTinyImagenet" or config["dataset"] == "SplitMiniImagenet":
             ann = ResNet18(num_classes=stream.schema.get_num_classes(), 
                                 in_channels=3, weights=None, small_input=False)
         else:
@@ -111,6 +116,13 @@ def run_experiment(config: dict[str, str | int | float]):
             use_augs=False,
             buffer_size=config["buffer_size"],
         )
+    elif config["strategy"] == "RAR":
+        learner_experience = RAR(
+                                learner=finetune,
+                                coreset_size=config["buffer_size"],
+                                augment=nn.Dropout(p=0.2),
+                                stream_shape= stream.shape
+                            )
     elif config["strategy"] == "gdumb":
         learner_experience = GDumb(
             schema=stream.schema,
@@ -145,7 +157,21 @@ def run_experiment(config: dict[str, str | int | float]):
             number_delayed_batches=config["number_delayed_batches"],
             prob_no_delay_batches=config["prob_no_delay_batches"],
             er_strategy=config["strategy"]
-        )  
+        )
+          
+        # return ocl_train_eval_delayed_loop(
+        #     learner_experience,
+        #     stream.train_loaders(batch_size=config["batch_size"]),
+        #     stream.test_loaders(batch_size=config["batch_size"]),
+        #     continual_evaluations=config["continual_evaluations"],
+        #     progress_bar=True,  
+        #     eval_window_size=config["eval_window_size"],
+        #     delay_label=config["delay_label"],
+        #     select_tasks=config["select_tasks"],
+        #     no_delayed_tasks=config["no_delayed_tasks"],
+        #     start_delay_size=config["start_delay_size"],
+        #     number_delayed_batches=config["number_delayed_batches"],
+        # )
     else:
         return ocl_train_eval_loop(
             learner_experience,
@@ -306,16 +332,16 @@ def run_random_experiments():
     
     #TODO: ER with additional loss based of ER-ACE
     config_repetitions = {
-        "repetitions": 30,
+        "repetitions": 1,
         # "no_delayed_batches": [0.1, 0.2, 0.3, 0.4],
-        "no_delayed_batches": [0.4],
+        "no_delayed_batches": [0.0],
         # "delay_label": [10, 50, 80, 100],
-        "delay_label": [100],
+        "delay_label": [0],
         # "strategies": ["gdumb", "ncm", "slda"],
-        # "strategies": ["EDR", "RER", "ER_f", "ER_l", "ER_2B", "ER-ACE", "ER-ACE-Agu"],
-        "strategies": ["EDR-ACE"],
-        # "datasets": ["SplitMNIST", "SplitFashionMNIST", "SplitCIFAR10", "SplitCIFAR100", "SplitTinyImagenet"],
-        "datasets": ["SplitMNIST", "SplitFashionMNIST", "SplitCIFAR10", "SplitCIFAR100"],
+        # "strategies": ["EDR","EDR-ACE", "RER", "ER_f", "ER_l", "ER_2B", "ER-ACE", "ER-ACE-Agu", "RAR"],
+        "strategies": ["ER-ACE"],
+        # "datasets": ["SplitMNIST", "SplitFashionMNIST", "SplitCIFAR10", "SplitCIFAR100", "SplitMiniImagenet"],
+        "datasets": ["SplitCIFAR10"],
     }
     
     config = {
@@ -337,7 +363,7 @@ def run_random_experiments():
         config["dataset"] = dataset
         if dataset == "SplitCIFAR100":
             config["num_tasks"] = 20
-        if dataset == "SplitTinyImagenet":
+        if dataset == "SplitMiniImagenet":
             config["num_tasks"] = 20
         
         for delay in config_repetitions["delay_label"]:
@@ -408,9 +434,13 @@ if __name__ == "__main__":
     # [E] Wang, Maorong, et al. "Improving plasticity in online continual learning via collaborative learning." Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition. 2024.
     # - Implement additional metrics: forgetting, backward transfer, forward transfer
     # - Implement ViT backbone model
+    # - Implement batches available variation after delay 
     # - Implement command line interface for running experiments with different configurations
    
     run_random_experiments()
     # run_random_no_delayed_experiments()
     # run_experiments()
     
+    # stream = SplitMiniImagenet(num_tasks=20, shuffle_tasks=True)
+    # stream = SplitCIFAR10(num_tasks=5, shuffle_tasks=True)
+    # print(stream.task_schedule)

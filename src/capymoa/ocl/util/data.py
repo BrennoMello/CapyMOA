@@ -45,6 +45,7 @@ def get_targets(dataset: Dataset[Tuple[Tensor, Tensor]]) -> LongTensor:
     if hasattr(dataset, "targets") and isinstance(dataset.targets, list):
         return LongTensor(dataset.targets)
 
+
     # Otherwise loop over the dataset to get the labels
     labels = LongTensor(len(dataset))
     for i, (_, y) in enumerate(dataset):  # type: ignore

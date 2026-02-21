@@ -4,6 +4,7 @@ from ._experience_replay import (ExperienceReplay, ExperienceDelayReplay,
 from ._slda import SLDA
 from ._ncm import NCM
 from ._gdumb import GDumb
+from ._rar import RAR
 
 __all__ = [
     "ExperienceReplay",
@@ -13,5 +14,6 @@ __all__ = [
     "ACELoss",
     "SLDA",
     "NCM",
-    "GDumb"
+    "GDumb",
+    "RAR",
 ]
