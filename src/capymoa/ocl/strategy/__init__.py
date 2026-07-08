@@ -18,4 +18,6 @@ __all__ = [
     "NCM",
     "GDumb",
     "RAR",
-, "RAR", "l2p", "EWC"]
+    "l2p", 
+    "EWC"
+]
