@@ -168,10 +168,12 @@ class TensorDatasetWithTransform(
         data: torch.Tensor,
         targets: torch.Tensor,
         transform: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
+        target_transform: Optional[Callable[[object], object]] = None,
     ):
         self.data = data
         self.targets = targets
         self.transform = transform
+        self.target_transform = target_transform
 
     def __len__(self):
         return len(self.data)
@@ -182,5 +184,7 @@ class TensorDatasetWithTransform(
 
         if self.transform:
             x = self.transform(x)
+        if self.target_transform:
+            y = self.target_transform(y)
 
         return x, y

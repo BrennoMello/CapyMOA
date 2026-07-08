@@ -1,6 +1,6 @@
 """Utilities for continual learning when using PyTorch datasets."""
 
-from typing import cast, Sequence, Sized, Set, Tuple
+from typing import Sequence, Sized, Set, Tuple
 
 import torch
 from torch import BoolTensor, LongTensor, Tensor
@@ -53,22 +53,39 @@ def get_targets(dataset: Dataset[Tuple[Tensor, Tensor]]) -> LongTensor:
     return labels
 
 
-def get_class_indices(targets: LongTensor) -> dict[int, LongTensor]:
-    """Return a dictionary containing the indices of each sample given the class.
+def group_indicies(
+    labels: LongTensor,
+    schedule: Sequence[Sequence[int]],
+    shuffle: bool = False,
+    rng: torch.Generator = torch.default_generator,
+) -> Sequence[LongTensor]:
+    """Group the indices of a dataset according to a class schedule.
 
-    >>> targets = torch.tensor([0, 1, 0, 1, 2])
-    >>> get_class_indices(targets)
-    {0: tensor([0, 2]), 1: tensor([1, 3]), 2: tensor([4])}
+    >>> labels = torch.tensor([0, 0, 1, 1, 2, 2])
+    >>> schedule = [{0, 1}, {2}]
+    >>> group_indicies(labels, schedule)
+    [tensor([0, 1, 2, 3]), tensor([4, 5])]
 
-    :param targets: A 1D tensor containing the class labels.
-    :return: A dictionary containing the indices of each class.
+    :param labels: A 1D tensor containing the class labels.
+    :param schedule: A sequence of sets containing class indices defining
+        task order and composition.
+    :param shuffle: If True, the indices in each group are shuffled.
+    :param rng: The random number generator used for shuffling, defaults
+        to torch.default_generator
+    :return: A list of tensors containing the indices for each group.
     """
-    indices: dict[int, LongTensor] = {}
-    unique_labels = cast(Tensor, targets.unique())  # type: ignore
-    for label in unique_labels:
-        mask = targets.eq(label)
-        indices[int(label)] = torch.nonzero(mask).squeeze(1).long()  # type: ignore
-    return indices
+    indicies = torch.arange(labels.size(0), device=labels.device)
+    grouped_indicies = []
+    for classes in schedule:
+        class_values = torch.tensor(
+            list(classes), dtype=labels.dtype, device=labels.device
+        )
+        mask = torch.isin(labels, class_values)
+        selected = indicies[mask]
+        if shuffle:
+            selected = selected[torch.randperm(selected.size(0), generator=rng)]
+        grouped_indicies.append(selected)
+    return grouped_indicies
 
 
 def task_free_class_incremental(
@@ -135,18 +152,11 @@ def partition_by_schedule(
     :return: A list of datasets, each corresponding to a task.
     """
     targets = get_targets(dataset)
-    class_indices = get_class_indices(targets)
-    task_datasets = []
-    for classes in class_schedule:
-        indices = torch.cat([class_indices[c] for c in classes])
-        if shuffle:
-            indices = indices[torch.randperm(indices.numel(), generator=rng)]
-        subset = Subset(dataset, cast(Sequence[int], indices))
-        subset.targets = targets[indices]  # type: ignore
-        assert isinstance(subset, Sized), "Subset should be a Sized object"
-        task_datasets.append(subset)
-
-    return task_datasets
+    grouped_indicies = group_indicies(targets, class_schedule, shuffle, rng)
+    tasks = []
+    for indicies in grouped_indicies:
+        tasks.append(Subset(dataset, indicies.tolist()))
+    return tasks
 
 
 def class_incremental_split(

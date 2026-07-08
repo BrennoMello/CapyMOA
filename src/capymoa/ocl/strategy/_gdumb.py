@@ -1,4 +1,4 @@
-from capymoa.ocl.util._coreset import GreedySampler
+from capymoa.ocl.util._replay import GreedySampler
 import torch
 from capymoa.base import BatchClassifier
 from capymoa.ocl.base import TestTaskAware

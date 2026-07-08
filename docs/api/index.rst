@@ -1,9 +1,9 @@
-API Reference
-=============
+API
+===
 
-Welcome to the capymoa API reference. This documentation is automatically
+Welcome to the CapyMOA API reference. This documentation is automatically
 generated from the source code and provides detailed information on the classes
-and functions available in capymoa. 
+and functions available in CapyMOA. 
 
 If you are looking to just use CapyMOA, you should start with the
 :ref:`tutorials<tutorials>`.
@@ -11,8 +11,8 @@ If you are looking to just use CapyMOA, you should start with the
 Types
 -----
 
-These module provide interfaces for learners, and other basic types used by
-capymoa.
+These modules provide interfaces for learners, and other basic types used by
+CapyMOA.
 
 ..  autosummary::
     :toctree: modules
@@ -55,6 +55,7 @@ These modules provide classes for defining machine learning problem settings.
     capymoa.drift
     capymoa.clusterers
     capymoa.automl
+    capymoa.feature_selection
 
 Evaluation
 ----------
@@ -89,3 +90,11 @@ Functions
 
 ..  automodule:: capymoa
     :members:
+
+
+Indices and tables
+==================
+
+* :ref:`genindex`
+* :ref:`modindex`
+* :ref:`search`

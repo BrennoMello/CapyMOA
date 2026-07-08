@@ -1,19 +1,22 @@
-from capymoa.evaluation import AnomalyDetectionEvaluator
-from capymoa.anomaly import (
-    HalfSpaceTrees,
-    OnlineIsolationForest,
-    Autoencoder,
-    StreamRHF,
-    StreamingIsolationForest,
-)
-from capymoa.base import AnomalyDetector
-from capymoa.base import MOAClassifier
-from capymoa.datasets import ElectricityTiny
-import pytest
 from functools import partial
 from typing import Callable, Optional
-from capymoa.base import _extract_moa_learner_CLI
 
+import pytest
+
+from capymoa.anomaly import (
+    AdaptiveIsolationForest,
+    Autoencoder,
+    HalfSpaceTrees,
+    IForestASD,
+    Loda,
+    OnlineIsolationForest,
+    RobustRandomCutForest,
+    StreamingIsolationForest,
+    StreamRHF,
+)
+from capymoa.base import AnomalyDetector, MOAClassifier, _extract_moa_learner_CLI
+from capymoa.datasets import ElectricityTiny
+from capymoa.evaluation import AnomalyDetectionEvaluator
 from capymoa.stream._stream import Schema
 
 
@@ -52,6 +55,51 @@ from capymoa.stream._stream import Schema
             0.60,
             None,
         ),
+        (
+            partial(
+                RobustRandomCutForest,
+                tree_size=50,
+                n_trees=10,
+                random_state=42,
+            ),
+            0.54,
+            None,
+        ),
+        (
+            partial(
+                AdaptiveIsolationForest,
+                window_size=256,
+                n_trees=100,
+                height=None,
+                seed=42,
+                m_trees=1,
+                weights=0.5,
+            ),
+            0.83,
+            None,
+        ),
+        (
+            partial(
+                IForestASD,
+                window_size=256,
+                sample_size=64,
+                n_trees=100,
+                height_limit=None,
+                random_state=42,
+            ),
+            0.61,
+            None,
+        ),
+        (
+            partial(
+                Loda,
+                n_projections=10,
+                window_size=100,
+                random_state=42,
+            ),
+            0.65,
+            None,
+        ),
     ],
     ids=[
         "HalfSpaceTrees",
@@ -59,6 +107,10 @@ from capymoa.stream._stream import Schema
         "Autoencoder",
         "StreamRHF",
         "StreamingIsolationForest",
+        "RobustRandomCutForest",
+        "AdaptiveIsolationForest",
+        "IForestASD",
+        "Loda",
     ],
 )
 def test_anomaly_detectors(

@@ -15,6 +15,21 @@ def mock_datasets():
     mock.patch("capymoa.ocl.datasets.SplitMNIST", TinySplitMNIST).start()
 
 
+def override_prequential_evaluation(max_instances: int = 100):
+    """Monkeypatch the prequential evaluation to limit the number of instances.
+
+    This is useful for testing purposes to speed up the evaluation.
+    """
+    import capymoa.evaluation as evaluation
+    from capymoa.evaluation import prequential_evaluation as _prequential_evaluation
+
+    def prequential_evaluation(*args, **kwargs):
+        kwargs["max_instances"] = max_instances
+        return _prequential_evaluation(*args, **kwargs)
+
+    evaluation.prequential_evaluation = prequential_evaluation
+
+
 def is_nb_fast() -> bool:
     """Should the notebook be run with faster settings.
 

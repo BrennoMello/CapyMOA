@@ -52,6 +52,8 @@ class OCLMetrics:
     anytime_accuracy_all: np.ndarray
     r"""The accuracy on all tasks after training on each step in each task.
 
+    Is a ndarray of shape (n_tasks * n_continual_evaluations,), dtype=np.float32.
+
     .. math::
     
         a_\text{any all}(t, h) = \frac{1}{T}\sum^T_{i=1} A_{t,h,i}
@@ -85,10 +87,15 @@ class OCLMetrics:
         \bar{a}_\text{any seen} = \frac{1}{T}\sum_{t=1}^T \frac{1}{H}\sum_{h=1}^H a_\text{any seen}(t, h)
     """
     anytime_task_index: np.ndarray
-    r"""The position in each task where the anytime accuracy was measured."""
+    r"""The position in each task where the anytime accuracy was measured.
+    
+    Is a ndarray of shape (n_tasks * n_continual_evaluations,), dtype=np.integer.
+    """
 
     accuracy_all: np.ndarray
     r"""The accuracy on all tasks after training on each task.
+
+    Is a ndarray of shape (n_tasks,), dtype=np.float32
     
     .. math::
 
@@ -105,7 +112,9 @@ class OCLMetrics:
     """
     accuracy_seen: np.ndarray
     r"""The accuracy on **seen** tasks after training on each task.
-    
+
+    Is a ndarray of shape (n_tasks,), dtype=np.float32.
+
     .. math::
 
         a_\text{seen}(t) = \frac{1}{t}\sum^t_{i=1} R_{t,i}
@@ -152,21 +161,43 @@ class OCLMetrics:
 
     accuracy_matrix: np.ndarray
     r"""A matrix measuring the accuracy on each task after training on each task.
+
+    Is a ndarray of shape (n_tasks, n_tasks), dtype=np.float32.
     
     ``R[i, j]`` is the accuracy on task :math:`j` after training on tasks
     :math:`1` through :math:`i`.
     """
 
+    class_cm: np.ndarray
+    r"""A confusion matrix of shape ``(task, true_class, predicted_class)``.
+    """
+
     anytime_accuracy_matrix: np.ndarray
     r"""A matrix measuring the accuracy on each task after training on each task and step.
+
+    Is a ndarray of shape (n_tasks * n_continual_evaluations, n_tasks), dtype=np.float32.
     
     This matrix is :math:`A` with the first two dimensions flattened to a 2D array.
     """
 
+    n_classes: int
+    r"""The number of classes :math:`C`."""
+
+    n_tasks: int
+    r"""The number of tasks :math:`T`."""
+
+    n_continual_evaluations: int
+    r"""The number of continual evaluations per task :math:`H`."""
+
     ttt: PrequentialResults
     """Test-then-train/prequential results."""
     boundaries: np.ndarray
-    """Instance index for the boundaries."""
+    r"""Instance index for the boundaries.
+
+    Used to map online evaluation to specific tasks.
+
+    Is a ndarray of shape (n_tasks + 1,), dtype=np.integer.
+    """
     ttt_windowed_task_index: np.ndarray
     """The position of each window within each task.
     
@@ -217,7 +248,7 @@ class _OCLEvaluator:
 
     cm: torch.Tensor
     """Confusion 'Matrix' of shape: 
-    ``(eval_step_id, train_task_id, test_task_id, true_class, predicted_class)``.
+    ``(train_task_id, eval_step_id, test_task_id, y_true, y_pred)``.
     """
 
     def __init__(self, task_count: int, eval_step_count: int, class_count: int):
@@ -275,8 +306,8 @@ class _OCLEvaluator:
 
         tasks = np.arange(self.task_count, dtype=int)
 
-        accuracy_seen = np.vectorize(_accuracy_seen)(tasks)
-        accuracy_all = np.vectorize(_accuracy_all)(tasks)
+        accuracy_seen = np.array([_accuracy_seen(t) for t in tasks])
+        accuracy_all = np.array([_accuracy_all(t) for t in tasks])
         boundaries = boundary_instances.numpy()
 
         ttt_windowed_task_index = None
@@ -293,6 +324,7 @@ class _OCLEvaluator:
             accuracy_all_avg=np.mean(accuracy_all),
             accuracy_seen_avg=np.mean(accuracy_seen),
             accuracy_matrix=accuracy_matrix.numpy(),
+            class_cm=self.cm[:, -1].sum(1).numpy(),
             anytime_accuracy_all=anytime_accuracy_all.flatten().numpy(),
             anytime_accuracy_seen=anytime_accuracy_seen.flatten().numpy(),
             anytime_accuracy_all_avg=anytime_accuracy_all.mean().item(),
@@ -309,6 +341,9 @@ class _OCLEvaluator:
             ttt=ttt,
             boundaries=boundaries,
             ttt_windowed_task_index=ttt_windowed_task_index,
+            n_tasks=self.task_count,
+            n_continual_evaluations=self.step_count,
+            n_classes=self.class_count,
         )
 
 
@@ -421,8 +456,11 @@ def ocl_train_eval_loop(
 ) -> OCLMetrics:
     """Train and evaluate a learner on a sequence of tasks.
 
-    :param learner: A classifier that is possibly train task aware and/or
-        test task aware.
+    * When a learn abstains prediction (i.e., returns `None`), we return a random
+      prediction from a uniform distribution over all classes.
+
+    :param learner: A classifier that is possibly train task aware and/or test task
+        aware.
     :param train_streams: A sequence of streams containing the training tasks.
     :param test_streams: A sequence of streams containing the testing tasks.
     :param continual_evaluations: The number of times to evaluate the learner
@@ -455,17 +493,21 @@ def ocl_train_eval_loop(
     )
     boundary_instances = torch.zeros(len(train_streams) + 1)
     start_wallclock_time, start_cpu_time = start_time_measuring()
+    # Random number generator for reproducible abstained predictions
+    rng = np.random.default_rng(learner.random_seed)
 
     # Setup progress bar
     train_len = sum(len(stream) for stream in train_streams)
     test_len = sum(len(stream) for stream in test_streams)
     pbar = tqdm(
-        total=train_len + test_len * continual_evaluations * n_tasks,
+        total=train_len * epochs + test_len * continual_evaluations * n_tasks,
         disable=not progress_bar,
         desc="Train & Eval",
     )
-
+    
+    train_batches = list()
     # Iterate over each task
+    #TODO: delay random batches
     for train_task_id, train_stream in enumerate(train_streams):
         # Setup stream and inform learner of the test task
         if isinstance(learner, TrainTaskAware):
@@ -483,35 +525,36 @@ def ocl_train_eval_loop(
                 online_eval.update(y.item(), y_pred)
                 windowed_eval.update(y.item(), y_pred)
 
-            # Evaluate the learner on evenly spaced steps during training
-            evaluate_every = len(train_stream) // continual_evaluations
-            if (step + 1) % evaluate_every == 0:
-                eval_step = step // evaluate_every
+                # Evaluate the learner on evenly spaced steps during training
+                evaluate_every = (len(train_stream) * epochs) // continual_evaluations
+                if (step + 1) % evaluate_every == 0:
+                    eval_step = step // evaluate_every
 
-                if eval_step >= continual_evaluations:
-                    # This can occur when not dropping the last incomplete batch.
-                    continue
+                    if eval_step >= continual_evaluations:
+                        # This can occur when not dropping the last incomplete batch.
+                        continue
 
-                for test_task_id, test_stream in enumerate(test_streams):
-                    # Setup stream and inform learner of the test task
-                    if isinstance(learner, TestTaskAware):
-                        learner.on_test_task(test_task_id)
+                    for test_task_id, test_stream in enumerate(test_streams):
+                        # Setup stream and inform learner of the test task
+                        if isinstance(learner, TestTaskAware):
+                            learner.on_test_task(test_task_id)
 
                     # predict instances in the current task
                     for test_xb, test_yb in test_stream:
                         pbar.update(1)
                         yb_pred, _  = _batch_test(learner, test_xb)
 
-                        for y, y_pred in zip(test_yb, yb_pred):
-                            metrics.holdout_update(
-                                train_task_id,
-                                eval_step,
-                                test_task_id,
-                                y.item(),
-                                y_pred,
-                            )
+                            for y, y_pred in zip(test_yb, yb_pred):
+                                metrics.holdout_update(
+                                    train_task_id,
+                                    eval_step,
+                                    test_task_id,
+                                    y.item(),
+                                    y_pred,
+                                )
 
-            boundary_instances[train_task_id + 1] = online_eval.instances_seen
+                boundary_instances[train_task_id + 1] = online_eval.instances_seen
+                step += 1
 
     # TODO: We should measure time spent in ``learner.train`` separately from
     # time spent in evaluation.

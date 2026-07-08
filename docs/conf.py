@@ -6,16 +6,22 @@
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 import os
+import sys
 from pathlib import Path
+from typing import Optional
+import re
 from capymoa.__about__ import __version__
 from docs.util.github_link import make_linkcode_resolve
+
+# Any subprocesses created during document building should use the same python environment
+os.environ["PYTHONEXECUTABLE"] = sys.executable
 
 discord_link = "https://discord.gg/spd2gQJGAb"
 contact_email = "heitor.gomes@vuw.ac.nz"
 capymoa_github = "https://github.com/adaptive-machine-learning/CapyMOA"
 
 project = "CapyMOA"
-copyright = "2024 CapyMOA Developers"
+copyright = "2026 CapyMOA Developers"
 author = "Heitor Murilo Gomes, Anton Lee, Nuwan Gunasekara, Marco Heyden, Yibin Sun, Guilherme Weigert Cassales"
 release = __version__
 html_title = f"{project}"
@@ -51,17 +57,17 @@ nitpick_ignore_regex = [
     ("py:class", r"sklearn\..*"),
     ("py:class", r"torch\..*"),
     ("py:class", r"tqdm\..*"),
+    ("py:class", r"torchvision\..*"),
+    ("py:class", r"Tensor"),
+    ("py:class", r"nn\.Module"),
 ]
+
+# These warnings are usually false positives.
+suppress_warnings = ["myst.xref_missing"]
 
 toc_object_entries_show_parents = "hide"
 autosummary_ignore_module_all = False
 autosummary_generate = True
-autosummary_context = {
-    # List of modules that we do not include inherited members in. This is
-    # usually because they import from torch.nn.Module or similar large
-    # classes.
-    "inherited_members_module_denylist": ["capymoa.ann"]
-}
 
 autodoc_member_order = "groupwise"
 autodoc_class_signature = "separated"
@@ -101,6 +107,7 @@ rst_epilog = f"""
 html_theme = "pydata_sphinx_theme"
 html_static_path = ["_static"]
 html_css_files = ["css/citation.css"]
+html_show_sourcelink = False
 
 # Setup symbolic links for notebooks
 
@@ -118,6 +125,7 @@ if not notebook_doc_source.exists():
 intersphinx_mapping = {
     "sklearn": ("https://scikit-learn.org/stable/", None),
     "torch": ("https://pytorch.org/docs/stable/", None),
+    "python": ("https://docs.python.org/3", None),
 }
 
 """ Options for linkcode extension ------------------------------------------
@@ -138,6 +146,11 @@ linkcode_resolve = make_linkcode_resolve(
 """
 html_theme_options = {
     "show_toc_level": 3,
+    "logo": {
+        "text": "CapyMOA",
+        "image_light": "_static/logo-96x96.png",
+        "image_dark": "_static/logo-96x96.png",
+    },
     "icon_links": [
         {
             "name": "GitHub",
@@ -165,3 +178,26 @@ html_theme_options = {
         },
     ],
 }
+
+autodoc_skip_member_patterns = [
+    # Inheriting from torch.nn.Module creates issues so we skip them.
+    r"torch\.nn\.modules\..*",
+]
+
+
+def autodoc_skip_member(app, obj_type, name, obj, skip, options) -> Optional[bool]:
+    if skip:
+        return None
+    if not hasattr(obj, "__module__") or not hasattr(obj, "__qualname__"):
+        return None
+    fqn = f"{obj.__module__}.{obj.__qualname__}"
+
+    for pattern in autodoc_skip_member_patterns:
+        if re.match(pattern, fqn):
+            return True
+
+    return None
+
+
+def setup(app):
+    app.connect("autodoc-skip-member", autodoc_skip_member)
