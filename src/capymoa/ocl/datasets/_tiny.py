@@ -114,3 +114,42 @@ class RotatedTinyMNIST(_BuiltInRotatedDomainScenario):
             torch.from_numpy(test_y).long(),
             transform=transform,
         )
+
+class SplitTinyImagenet(_BuiltInCIScenario):
+    _dataset_key = "tiny-imagenet-200"
+    num_classes = 200
+    default_task_count = 100
+    labels_to_wnids: dict[int, str] = {}
+    
+    _num_workers = 64
+    
+    @classmethod
+    def _download_dataset(cls, train, directory, auto_download, transform):
+        try:
+            path = download_unpacked(_SOURCES["TinyImagenet"], get_download_dir())
+            tmp_path = path / cls._dataset_key
+            
+            for file in os.listdir(tmp_path):
+                os.rename(tmp_path/file, path/file)
+            
+            os.rmdir(tmp_path)
+
+            val = path/"val"
+            with open(val/'val_annotations.txt') as v:
+                for fn, lb in (l.strip().split()[:2] for l in v.readlines()):
+                    if not os.path.exists(val/lb):
+                        os.mkdir(val/lb)
+                    os.rename(val/f'images/{fn}', val/lb/fn)
+            
+            os.rmdir(val/"images")
+            shutil.rmtree(path/"test", True)
+        
+        except FileExistsError:
+            path = get_download_dir() / cls._dataset_key
+
+        if train:
+            ds = datasets.ImageFolder(path/"train", transform)
+        else:
+            ds = datasets.ImageFolder(path/"val", transform)
+        
+        return _CustomDataLoader(ds)

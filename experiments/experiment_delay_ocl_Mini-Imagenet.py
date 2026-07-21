@@ -10,7 +10,7 @@ if __name__ == "__main__":
         "delay_label": [100],
         # "strategies": ["gdumb", "ncm", "slda"],
         # "strategies": ["EDR","EDR-ACE", "RER", "ER_f", "ER_l", "ER_2B", "ER-ACE", "ER-ACE-Agu", "RAR"],
-        "strategies": ["RER", "ER_l", "ER_2B", "EDR-ACE"],
+        "strategies": ["RAR"],
         # "datasets": ["SplitMNIST", "SplitFashionMNIST", "SplitCIFAR10", "SplitCIFAR100", "SplitMiniImagenet"],
         "datasets": ["SplitMiniImagenet"],
     }

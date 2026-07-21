@@ -229,4 +229,29 @@ class ResNet18(nn.Module):
         self.model.fc = nn.Linear(self.model.fc.in_features, num_classes)
 
     def forward(self, x):
+        if x.dim() == 2:
+            batch_size = x.size(0)
+            n_features = x.size(1)
+
+            if self.model.conv1.in_channels == 1:
+                if n_features == 28 * 28:
+                    x = x.reshape(batch_size, 1, 28, 28)
+                elif n_features == 32 * 32:
+                    x = x.reshape(batch_size, 1, 32, 32)
+                else:
+                    raise ValueError(f"Unsupported flattened grayscale input size: {n_features}")
+            
+            elif self.model.conv1.in_channels == 3:
+                if n_features == 32 * 32 * 3:
+                    x = x.reshape(batch_size, 3, 32, 32)
+                elif n_features == 224 * 224 * 3:
+                    x = x.reshape(batch_size, 3, 224, 224)
+                elif n_features == 244 * 244 * 3:
+                    x = x.reshape(batch_size, 3, 244, 244)
+                else:
+                    raise ValueError(f"Unsupported flattened RGB input size: {n_features}")
+        
+        if x.device != next(self.model.parameters()).device:
+            x = x.to(next(self.model.parameters()).device)        
+        
         return self.model(x)

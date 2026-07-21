@@ -48,7 +48,7 @@ torch.Size([1, 28, 28])
 """
 
 from ._base import _BuiltInCIScenario
-from ._tiny import RotatedTinyMNIST, TinySplitMNIST
+from ._tiny import RotatedTinyMNIST, TinySplitMNIST, SplitTinyImagenet
 from ._vision import (
     DomainCIFAR100,
     RotatedFashionMNIST,
@@ -57,6 +57,8 @@ from ._vision import (
     SplitCIFAR100,
     SplitFashionMNIST,
     SplitMNIST,
+    SplitMiniImagenet,
+
 )
 from ._vit import DomainCIFAR100ViT, SplitCIFAR10ViT, SplitCIFAR100ViT
 
@@ -74,4 +76,6 @@ __all__ = [
     "SplitCIFAR10",
     "SplitCIFAR100",
     "DomainCIFAR100",
+    "SplitMiniImagenet",
+    "SplitTinyImagenet",
 ]

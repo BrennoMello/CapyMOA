@@ -1,44 +1,23 @@
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Callable, List, Optional, Sequence, Set, Tuple, Generator, Type, cast
+from typing import Any, Callable, List, Optional, Sequence, Set, Tuple, Type, cast
 
 import torch
 from torch import Tensor
 from torch.utils.data import ConcatDataset, DataLoader, Dataset, TensorDataset
-from torchvision.datasets import ImageFolder
-from torchvision.transforms import Compose, v2, Lambda, Normalize, ToTensor
+from torchvision.transforms import Compose, Lambda, Normalize, ToTensor
 from torchvision.transforms.functional import rotate
 
-from capymoa.datasets import get_download_dir, download_unpacked
+from capymoa.datasets import get_download_dir
 from capymoa.instance import LabeledInstance
 from capymoa.ocl.util.data import (
-        (
     class_incremental_schedule,
     class_schedule_to_task_mask,
     get_targets,
-    partition_by_schedule, task_free_class_incremental
-    ),
+    partition_by_schedule,
 )
 from capymoa.stream import Stream, TorchStream
 from capymoa.stream._stream import Schema
-
-from json import dump as json_dump, load as json_load
-from PIL import Image, ImageFile
-import pandas as pd
-import numpy as np
-import requests
-import zipfile
-import shutil
-import os
-
-
-_SOURCES = {
-    "capymoa_tiny_mnist": "https://www.dropbox.com/scl/fi/ry3mqtic4gr02u8kux5yz/capymoa_tiny_mnist.tar.gz?rlkey=khdrktr0ulmjcpbkbhejwfq36&st=0icbomup&dl=1",
-    "CIFAR100-vit_base_patch16_224_augreg_in21k": "https://www.dropbox.com/scl/fi/twk8c21xgs5j13xxmcm7q/CIFAR100-vit_base_patch16_224_augreg_in21k.tar.gz?rlkey=xbg7olp440szekvooenes8dhp&st=cznv0q5t&dl=1",
-    "CIFAR10-vit_base_patch16_224_augreg_in21k": "https://www.dropbox.com/scl/fi/adxx5u399klcugqk3xlix/CIFAR10-vit_base_patch16_224_augreg_in21k.tar.gz?rlkey=ozfddbomkyt78oyco3c11hz4f&st=xd24ewmr&dl=1",
-    "TinyImagenet": "http://cs231n.stanford.edu/tiny-imagenet-200.zip",
-    "MiniImageNet": "https://www.kaggle.com/api/v1/datasets/download/ctrnngtrung/miniimagenet" 
-}
 
 
 class _PreloadedDataset(TensorDataset):
@@ -112,7 +91,6 @@ class _BuiltInCIScenario(ABC):
         normalize_features: bool = False,
         preload_test: bool = True,
         preload_train: bool = False,
-        task_option: Optional[str] = None,
     ):
         """Create a new online continual learning datamodule.
 
@@ -165,7 +143,6 @@ class _BuiltInCIScenario(ABC):
                 "Cannot normalize features since mean and std are not defined."
             )
         self.num_tasks = num_tasks
-        self.task_option = task_option
 
         generator = torch.Generator().manual_seed(seed)
         self.task_schedule = class_incremental_schedule(
@@ -181,23 +158,13 @@ class _BuiltInCIScenario(ABC):
         test_dataset = self._download_dataset(
             False, directory, auto_download, test_transform
         )
-        if self.task_option is not None:
-            self.train_tasks = task_free_class_incremental(
-                train_dataset,
-                shuffle=shuffle_data,
-                rng=generator,
-            )
-            self.test_tasks = task_free_class_incremental(test_dataset)
-            print(f"Task-free class-incremental with {len(self.train_tasks)} tasks.")
-        else:
-            self.train_tasks = partition_by_schedule(
-                train_dataset,
-                self.task_schedule,
-                shuffle=shuffle_data,
-                rng=generator,
-            )
-            self.test_tasks = partition_by_schedule(test_dataset, self.task_schedule)
-            print(f"Task-based class-incremental with {len(self.train_tasks)} tasks.")
+        self.train_tasks = partition_by_schedule(
+            train_dataset,
+            self.task_schedule,
+            shuffle=shuffle_data,
+            rng=generator,
+        )
+        self.test_tasks = partition_by_schedule(test_dataset, self.task_schedule)
 
         if preload_train:
             self.train_tasks = self._preload_datasets(self.train_tasks)
@@ -315,7 +282,6 @@ class _TorchVisionDownload:
     """Shared torchvision dataset downloader for classification scenarios."""
 
     dataset_type: Type[Dataset]
-    shape = [1, 28, 28]
 
     @classmethod
     def _download_dataset(
@@ -393,98 +359,6 @@ class _BuiltInRotatedDomainScenario(_BuiltInCIScenario):
                 directory,
                 auto_download,
                 self._task_transform(angle, train_transform, normalize),
-class TinySplitMNIST(_BuiltInCIScenario):
-    """A lower resolution and smaller version of the SplitMNIST dataset for testing.
-
-    You should use :class:`SplitMNIST` instead, this dataset is intended for testing
-    and documentation purposes.
-
-    - 16x16 resolution
-    - 100 training samples per class
-    - 20 testing samples per class
-    - 10 classes
-    - 5 tasks
-    """
-
-    num_classes = 10
-    default_task_count = 5
-    mean = [0.1307]
-    std = [0.3081]
-    default_train_transform = None
-    default_test_transform = None
-    _dataset_key = "capymoa_tiny_mnist"
-    shape = [1, 16, 16]
-
-    @classmethod
-    def _download_dataset(
-        cls,
-        train: bool,
-        directory: Path,
-        auto_download: bool,
-        transform: Optional[Any],
-    ) -> Dataset[Tuple[Tensor, Tensor]]:
-        ((train_x, train_y), (test_x, test_y)) = download_numpy_dataset(
-            dataset_name=cls._dataset_key,
-            url=_SOURCES[cls._dataset_key],
-            auto_download=auto_download,
-            downloads=directory,
-        )
-        if train:
-            return TensorDatasetWithTransform(
-                torch.from_numpy(train_x).float().unsqueeze(1) / 255.0,
-                torch.from_numpy(train_y).long(),
-                transform=transform,
-            )
-        else:
-            return TensorDatasetWithTransform(
-                torch.from_numpy(test_x).float().unsqueeze(1) / 255.0,
-                torch.from_numpy(test_y).long(),
-                transform=transform,
-            )
-
-
-class SplitCIFAR100ViT(_BuiltInCIScenario):
-    """CIFAR100 encoded by a Vision Transformer (ViT).
-
-    * Encoded using the ``vit_base_patch16_224_augreg_in21k`` pre-trained
-      backbone [1]_.
-    * 768 dimensional features (extracted from the last layer of the ViT).
-    * 100 classes.
-    * 50,000 training samples
-    * 10,000 testing samples
-    * Useful for developing and evaluating prototype based continual
-      learning algorithms.
-
-    ..  [1] Model card for ``vit_base_patch16_224.augreg_in21k``
-        https://huggingface.co/timm/vit_base_patch16_224.augreg_in21k
-    """
-
-    num_classes = 100
-    default_task_count = 10
-    default_train_transform = None
-    default_test_transform = None
-    shape = [768]
-    _dataset_key = "CIFAR100-vit_base_patch16_224_augreg_in21k"
-
-    @classmethod
-    def _download_dataset(
-        cls,
-        train: bool,
-        directory: Path,
-        auto_download: bool,
-        transform: Optional[Any],
-    ) -> Dataset[Tuple[Tensor, Tensor]]:
-        ((train_x, train_y), (test_x, test_y)) = download_numpy_dataset(
-            dataset_name=cls._dataset_key,
-            url=_SOURCES[cls._dataset_key],
-            auto_download=auto_download,
-            downloads=directory,
-        )
-        if train:
-            return TensorDatasetWithTransform(
-                torch.from_numpy(train_x).float(),
-                torch.from_numpy(train_y).long(),
-                transform=transform,
             )
             if shuffle_data:
                 train_dataset = self._shuffle_dataset(train_dataset, generator)
@@ -534,238 +408,9 @@ class SplitCIFAR100ViT(_BuiltInCIScenario):
     def _shuffle_dataset(
         dataset: Dataset[Tuple[Tensor, Tensor]],
         generator: torch.Generator,
-        else:
-            return TensorDatasetWithTransform(
-                torch.from_numpy(test_x).float(),
-                torch.from_numpy(test_y).long(),
-                transform=transform,
-            )
-
-
-class SplitCIFAR10ViT(SplitCIFAR100ViT):
-    """CIFAR10 encoded by a Vision Transformer (ViT).
-
-    * Encoded using the ``vit_base_patch16_224_augreg_in21k`` pre-trained
-      backbone [1]_.
-    * 768 dimensional features (extracted from the last layer of the ViT).
-    * 10 classes.
-    * 50,000 training samples
-    * 10,000 testing samples
-    * Useful for developing and evaluating prototype based continual learning
-      algorithms.
-
-    ..  [1] Model card for ``vit_base_patch16_224.augreg_in21k``
-        https://huggingface.co/timm/vit_base_patch16_224.augreg_in21k
-    """
-
-    _dataset_key = "CIFAR10-vit_base_patch16_224_augreg_in21k"
-
-    num_classes = 10
-    default_task_count = 5
-    shape = [768]
-
-
-class SplitFashionMNIST(_BuiltInCIScenario):
-    """Split Fashion MNIST dataset for online class incremental learning.
-
-    **References:**
-
-    #. Xiao, H., Rasul, K., & Vollgraf, R. (2017, August 28). Fashion-MNIST:
-       a Novel Image Dataset for Benchmarking Machine Learning Algorithms.
-    """
-
-    num_classes = 10
-    default_task_count = 5
-    mean = [0.286]
-    std = [0.353]
-    shape = [1, 28, 28]
-
-    @classmethod
-    def _download_dataset(
-        cls,
-        train: bool,
-        directory: Path,
-        auto_download: bool,
-        transform: Optional[Any],
     ) -> Dataset[Tuple[Tensor, Tensor]]:
-        return datasets.FashionMNIST(
-            directory,
-            train=train,
-            download=auto_download,
-            transform=transform,
-        )
-
-
-class SplitCIFAR10(_BuiltInCIScenario):
-    """Split CIFAR-10 dataset for online class incremental learning.
-
-    **References:**
-
-    #. Krizhevsky, A. (2009). Learning Multiple Layers of Features from Tiny
-       Images.
-    """
-
-    num_classes = 10
-    default_task_count = 5
-    mean = [0.491, 0.482, 0.447]
-    std = [0.247, 0.243, 0.262]
-    shape = [3, 32, 32]
-
-    @classmethod
-    def _download_dataset(
-        cls,
-        train: bool,
-        directory: Path,
-        auto_download: bool,
-        transform: Optional[Any],
-    ) -> Dataset[Tuple[Tensor, Tensor]]:
-        return datasets.CIFAR10(
-            directory,
-            train=train,
-            download=auto_download,
-            transform=transform,
-        )
-
-class _CustomDataLoader(DataLoader):
-    def __getitem__(self, index):
-        return self.dataset[index]
-    
-class SplitCIFAR100(_BuiltInCIScenario):
-    """Split CIFAR-100 dataset for online class incremental learning.
-
-    **References:**
-
-    #. Krizhevsky, A. (2009). Learning Multiple Layers of Features from Tiny
-       Images.
-    """
-
-    num_classes = 100
-    default_task_count = 10
-    mean = [0.507, 0.487, 0.441]
-    std = [0.267, 0.256, 0.276]
-    shape = [3, 32, 32]
-
-    @classmethod
-    def _download_dataset(
-        cls,
-        train: bool,
-        directory: Path,
-        auto_download: bool,
-        transform: Optional[Any],
-    ) -> Dataset[Tuple[Tensor, Tensor]]:
-        return datasets.CIFAR100(
-            directory,
-            train=train,
-            download=auto_download,
-            transform=transform,
-        )
-
-
-class _CustomDataLoader(DataLoader):
-    def __getitem__(self, index):
-        return self.dataset[index]
-    
-
-class SplitTinyImagenet(_BuiltInCIScenario):
-    _dataset_key = "tiny-imagenet-200"
-    num_classes = 200
-    default_task_count = 100
-    labels_to_wnids: dict[int, str] = {}
-    
-    _num_workers = 64
-    
-    @classmethod
-    def _download_dataset(cls, train, directory, auto_download, transform):
-        try:
-            path = download_unpacked(_SOURCES["TinyImagenet"], get_download_dir())
-            tmp_path = path / cls._dataset_key
-            
-            for file in os.listdir(tmp_path):
-                os.rename(tmp_path/file, path/file)
-            
-            os.rmdir(tmp_path)
-
-            val = path/"val"
-            with open(val/'val_annotations.txt') as v:
-                for fn, lb in (l.strip().split()[:2] for l in v.readlines()):
-                    if not os.path.exists(val/lb):
-                        os.mkdir(val/lb)
-                    os.rename(val/f'images/{fn}', val/lb/fn)
-            
-            os.rmdir(val/"images")
-            shutil.rmtree(path/"test", True)
-        
-        except FileExistsError:
-            path = get_download_dir() / cls._dataset_key
-
-        if train:
-            ds = datasets.ImageFolder(path/"train", transform)
-        else:
-            ds = datasets.ImageFolder(path/"val", transform)
-        
-        return _CustomDataLoader(ds)
-
-class SplitMiniImagenet(_BuiltInCIScenario):
-    """Split MiniImagenet dataset for online class incremental learning.
-
-    **References:**
-
-    #
-    """
-    num_classes = 100
-    default_task_count = 10
-    mean = [0.485, 0.456, 0.406]  
-    std = [0.229, 0.224, 0.225]  
-    default_train_transform = v2.Compose([v2.Resize((244, 244)), v2.ToImage(), v2.ToDtype(torch.float32, scale=True)])
-    default_test_transform = v2.Compose([v2.Resize((244, 244)), v2.ToImage(), v2.ToDtype(torch.float32, scale=True)])
-    shape = [3, 244, 244]
-
-    @classmethod
-    def _download_dataset(
-        cls,
-        train: bool,
-        directory: Path,
-        auto_download: bool,
-        transform: Optional[Any],
-    ) -> Dataset[Tuple[Tensor, Tensor]]:
-        
-        if 'imagenet' not in os.listdir(directory):
-            cls._download_and_extract(_SOURCES["MiniImageNet"], directory)
-
-        if train:
-            train = Dataset(directory/"imagenet/train", transform = transform)
-            
-            return train
-        else:
-            test = Dataset(directory/"imagenet/test", transform = transform)
-            
-            return test
-
-    def _download_and_extract(self, url, extract_to):
-        """Download the zip file and extract it."""
-        
-        zip_path = extract_to / "imagenet.zip"
-        extract_to.mkdir(parents=True, exist_ok=True)
-        
-        print("Downloading ImageNet from Kaggle...")
-        response = requests.get(url, stream=True)
-        response.raise_for_status()
-        
-        with open(zip_path, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                f.write(chunk)
-        
-        print("Extracting...")
-        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-            zip_ref.extractall(extract_to)
-        
-        os.remove(zip_path)
-        print("Done. Files extracted to:", extract_to)
-
-    
-class Dataset(ImageFolder):
-    def __init__(self, path, transform=None):
-        super().__init__(path, transform=transform)
-        self.path = path
-        path_idx2label = pd.read_csv(os.path.join(self.path, '..', 'map_clsloc.txt'), sep=' ', header=None)
-        self.idx2label = dict(zip(path_idx2label[0], path_idx2label[1]))
+        targets = get_targets(dataset)
+        indices = torch.randperm(len(targets), generator=generator)
+        subset = torch.utils.data.Subset(dataset, cast(Sequence[int], indices))
+        subset.targets = targets[indices]  # type: ignore
+        return subset

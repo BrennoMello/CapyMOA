@@ -11,11 +11,12 @@ from capymoa.ocl.evaluation import (
 from capymoa.ocl.strategy import (
     ExperienceReplay, ExperienceDelayReplay, ExperienceReplayACE,
     ExperienceReplayAsymmetricCrossEntropy, ACELoss,
-    GDumb, NCM, SLDA, RAR
+    GDumb, NCM, SLDA, RAR, EWC
     )
 from capymoa.ann import (
     Perceptron, ResNet18
     )
+import torchvision.transforms as T
 from plot import plot_multiple, ocl_plot
 from capymoa.classifier import Finetune
 import plotly.express as px
@@ -116,10 +117,13 @@ def run_experiment(config: dict[str, str | int | float]):
             buffer_size=config["buffer_size"],
         )
     elif config["strategy"] == "RAR":
+        augment = T.Compose([
+            T.RandomRotation(10),
+        ])
         learner_experience = RAR(
                                 learner=finetune,
                                 coreset_size=config["buffer_size"],
-                                augment=nn.Dropout(p=0.2),
+                                augment=augment,
                             )
     elif config["strategy"] == "gdumb":
         learner_experience = GDumb(
@@ -138,6 +142,15 @@ def run_experiment(config: dict[str, str | int | float]):
     elif config["strategy"] == "slda":
         learner_experience = SLDA(
             schema=stream.schema
+        )
+    elif config["strategy"] == "EWC":
+        optimiser = torch.optim.SGD(ann.parameters(), lr=0.06)
+        learner_experience = EWC(
+            schema=stream.schema,
+            model=ann,
+            optimiser=optimiser,
+            device=device,
+            lambda_= 0.4,  # Regularization strength
         )
     else:
         raise ValueError(f"Strategy {config['strategy']} not recognized.")

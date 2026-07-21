@@ -1,11 +1,13 @@
 from pathlib import Path
 from typing import Any, Callable, List, Optional, Sequence, Tuple, cast
+import os
 
 import torch
 from torch import Tensor
 from torch.utils.data import ConcatDataset, Dataset, Subset
 from torchvision import datasets
-from torchvision.transforms import Compose, Normalize, ToTensor
+from torchvision.datasets import ImageFolder
+from torchvision.transforms import Compose, Normalize, ToTensor, v2
 
 from capymoa.datasets import get_download_dir
 from capymoa.ocl.util.data import group_indicies
@@ -16,6 +18,11 @@ from ._base import (
     _BuiltInRotatedDomainScenario,
     _TorchVisionDownload,
 )
+
+from ._constants import _SOURCES
+import pandas as pd
+import requests
+import zipfile
 
 
 class SplitMNIST(_TorchVisionDownload, _BuiltInCIScenario):
@@ -290,3 +297,70 @@ class DomainCIFAR100(_TorchVisionDownload, _BuiltInCIScenario):
                 )
             )
         return tasks
+
+
+class MiniImagenetDataset(ImageFolder):
+    def __init__(self, path, transform=None):
+        super().__init__(path, transform=transform)
+        self.path = path
+        path_idx2label = pd.read_csv(os.path.join(self.path, '..', 'map_clsloc.txt'), sep=' ', header=None)
+        self.idx2label = dict(zip(path_idx2label[0], path_idx2label[1]))
+
+class SplitMiniImagenet(_BuiltInCIScenario):
+    """Split MiniImagenet dataset for online class incremental learning.
+
+    **References:**
+
+    #
+    """
+    num_classes = 100
+    default_task_count = 10
+    mean = [0.485, 0.456, 0.406]  
+    std = [0.229, 0.224, 0.225]  
+    default_train_transform = v2.Compose([v2.Resize((244, 244)), v2.ToImage(), v2.ToDtype(torch.float32, scale=True)])
+    default_test_transform = v2.Compose([v2.Resize((244, 244)), v2.ToImage(), v2.ToDtype(torch.float32, scale=True)])
+    shape = [3, 244, 244]
+
+    @classmethod
+    def _download_dataset(
+        cls,
+        train: bool,
+        directory: Path,
+        auto_download: bool,
+        transform: Optional[Any],
+    ) -> Dataset[Tuple[Tensor, Tensor]]:
+        
+        if 'imagenet' not in os.listdir(directory):
+            cls._download_and_extract(_SOURCES["MiniImageNet"], directory)
+
+        if train:
+            train = MiniImagenetDataset(directory/"imagenet/train", transform=transform)
+            
+            return train
+        else:
+            test = MiniImagenetDataset(directory/"imagenet/test", transform=transform)
+            
+            return test
+
+    def _download_and_extract(self, url, extract_to):
+        """Download the zip file and extract it."""
+        
+        zip_path = extract_to / "imagenet.zip"
+        extract_to.mkdir(parents=True, exist_ok=True)
+        
+        print("Downloading ImageNet from Kaggle...")
+        response = requests.get(url, stream=True)
+        response.raise_for_status()
+        
+        with open(zip_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+        
+        print("Extracting...")
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            zip_ref.extractall(extract_to)
+        
+        os.remove(zip_path)
+        print("Done. Files extracted to:", extract_to)
+
+    

@@ -5,7 +5,7 @@ import os
 from typing import List, Optional, Sequence, Tuple, Union
 
 from capymoa.ocl.strategy import (
-        ExperienceReplay, GDumb, NCM, SLDA, RAR
+        ExperienceReplay, GDumb, NCM, SLDA, RAR, EWC
     )
 from capymoa.ann import ResNet18
 
@@ -279,7 +279,7 @@ class _OCLEvaluator:
         # TODO: handle missing predictions
 
     def build(
-        self, ttt: PrequentialResults, boundary_instances: torch.Tensor, total_flops: float
+        self, ttt: PrequentialResults, boundary_instances: torch.Tensor, total_flops: float = 0.0,
     ) -> OCLMetrics:
         """Creates metrics using collected statistics."""
         correct = self.cm.diagonal(dim1=3, dim2=4).sum(-1)
@@ -349,15 +349,15 @@ class _OCLEvaluator:
 
 _OCLClassifier = Union[TrainTaskAware, TestTaskAware, Classifier]
 
-def _batch_test(learner: Classifier, x: Tensor) -> np.ndarray:
+def _batch_test_delayed(learner: Classifier, x: Tensor) -> np.ndarray:
     """Test a batch of instances using the learner."""
     batch_size = x.shape[0]
-    if isinstance(learner.learner.model, ResNet18):
+    model = getattr(getattr(learner, "learner", None), "model", None)
+    if isinstance(model, ResNet18) or isinstance(learner, EWC):
         x = x.to(dtype=learner.x_dtype, device=learner.device)
-        # if isinstance(learner.learner.criterion, ACELoss):
+        # if isinstance(model.criterion, ACELoss):
         #     return learner.batch_predict(x).cpu().detach().numpy(), learner.batch_predict_logits(x).cpu().detach().numpy()
-        
-        return learner.batch_predict(x).cpu().detach().numpy(), learner.batch_predict_proba(x).cpu().detach().numpy() 
+        return learner.batch_predict(x).cpu().detach().numpy(), learner.batch_predict_proba(x).cpu().detach().numpy()
     elif isinstance(learner, BatchClassifier):
         x = x.view(batch_size, -1)
         x = x.to(dtype=learner.x_dtype, device=learner.device)
@@ -370,27 +370,7 @@ def _batch_test(learner: Classifier, x: Tensor) -> np.ndarray:
             yb_pred[i] = learner.predict(instance)
         return yb_pred
 
-def _batch_test_old(learner: Classifier, x: Tensor) -> np.ndarray:
-    """Test a batch of instances using the learner."""
-    batch_size = x.shape[0]
-    if isinstance(learner.learner.model, ResNet18):
-        x = x.to(dtype=learner.x_dtype, device=learner.device)
-        
-        # return learner.batch_predict(x).cpu().detach().numpy(), learner.batch_predict_proba(x).cpu().detach().numpy()
-        return learner.batch_predict(x).cpu().detach().numpy(), learner.batch_predict_logits(x).cpu().detach().numpy()
-    elif isinstance(learner, BatchClassifier):
-        x = x.view(batch_size, -1)
-        x = x.to(dtype=learner.x_dtype, device=learner.device)
-        return learner.batch_predict(x).cpu().detach().numpy(), learner.batch_predict_proba(x).cpu().detach().numpy()
-    else:
-        yb_pred = np.zeros(batch_size, dtype=int)
-        for i in range(batch_size):
-            instance = Instance.from_array(learner.schema, x[i].numpy())
-            yb_pred[i] = learner.predict(instance)
-        return yb_pred
-
-
-def _batch_train(learner: Classifier, x: Tensor, y: Tensor, train_task_id: int):
+def _batch_train_delayed(learner: Classifier, x: Tensor, y: Tensor, train_task_id: int):
     """Train a batch of instances using the learner."""
     batch_size = x.shape[0]
     x = x.to(dtype=learner.x_dtype, device=learner.device)
@@ -399,10 +379,10 @@ def _batch_train(learner: Classifier, x: Tensor, y: Tensor, train_task_id: int):
     # x = x.view(batch_size, -1)
     if (isinstance(learner, ExperienceReplay) or 
         isinstance(learner, ExperienceDelayReplay)):
-        
+      
         learner.batch_train(x, y, train_task_id)
     elif isinstance(learner, BatchClassifier):
-        
+        x = x.view(batch_size, -1)
         learner.batch_train(x, y)
     else:
         for i in range(batch_size):
@@ -430,7 +410,7 @@ def _batch_train_random(learner: Classifier, batches: List[Tuple[Tensor, Tensor]
         print(f'Delay random {batch[3]}')
 
     # print(f'Train random ER {len(batches)} batches, {count} instances, selected {n} instances')
-    _batch_train(learner, xb_selected, yb_selected, train_task_id )
+    _batch_train_delayed(learner, xb_selected, yb_selected, train_task_id )
 
 def _batch_delayed_train(learner: Classifier, batches: List[Tuple[Tensor, Tensor]], 
                         delay: int, train_task_id: int):
@@ -445,6 +425,43 @@ def _batch_mixed_delayed_train(learner: Classifier, batches: List[Tuple[Tensor, 
         print(f'Delay mixed {batch[3]}')
     learner.batch_mixed_train(batches, train_task_id)
 
+def _abstain_prediction_uniform(rng: np.random.Generator, n_classes: int) -> LabelIndex:
+    return int(rng.integers(0, n_classes))
+
+def _batch_test(rng: np.random.Generator, learner: Classifier, x: Tensor) -> np.ndarray:
+    """Test a batch of instances using the learner."""
+    batch_size = x.shape[0]
+    x = x.view(batch_size, -1)
+    if isinstance(learner, BatchClassifier):
+        x = x.to(dtype=learner.x_dtype, device=learner.device)
+        return learner.batch_predict(x).cpu().numpy()
+    else:
+        yb_pred = np.zeros(batch_size, dtype=int)
+        for i in range(batch_size):
+            instance = Instance.from_array(learner.schema, x[i].numpy())
+            y_pred = learner.predict(instance)
+            if y_pred is None:
+                y_pred = _abstain_prediction_uniform(
+                    rng, learner.schema.get_num_classes()
+                )
+            yb_pred[i] = y_pred
+        return yb_pred
+
+
+def _batch_train(learner: Classifier, x: Tensor, y: Tensor):
+    """Train a batch of instances using the learner."""
+    batch_size = x.shape[0]
+    x = x.view(batch_size, -1)
+    if isinstance(learner, BatchClassifier):
+        x = x.to(dtype=learner.x_dtype, device=learner.device)
+        y = y.to(dtype=learner.y_dtype, device=learner.device)
+        learner.batch_train(x, y)
+    else:
+        for i in range(batch_size):
+            instance = LabeledInstance.from_array(
+                learner.schema, x[i].numpy(), int(y[i].item())
+            )
+            learner.train(instance)
 
 def ocl_train_eval_loop(
     learner: _OCLClassifier,
@@ -453,6 +470,7 @@ def ocl_train_eval_loop(
     continual_evaluations: int = 1,
     progress_bar: bool = False,
     eval_window_size: int = 1000,
+    epochs: int = 1,
 ) -> OCLMetrics:
     """Train and evaluate a learner on a sequence of tasks.
 
@@ -463,13 +481,18 @@ def ocl_train_eval_loop(
         aware.
     :param train_streams: A sequence of streams containing the training tasks.
     :param test_streams: A sequence of streams containing the testing tasks.
-    :param continual_evaluations: The number of times to evaluate the learner
-        during each task. If 1, the learner is only evaluated at the end of each task.
-    :param progress_bar: Whether to display a progress bar. The bar displayed
-        will show the progress over all training and evaluation steps including
-        the continual evaluations.
+    :param continual_evaluations: The number of times to evaluate the learner during
+        each task. If 1, the learner is only evaluated at the end of each task.
+    :param progress_bar: Whether to display a progress bar. The bar displayed will show
+        the progress over all training and evaluation steps including the continual
+        evaluations.
+    :param epochs: The number of times to repeat the training stream for each task.
+        **This violates the online learning experimental setting**, since each instance
+        is seen multiple times. However, it can be useful for offline continual learning
+        experiments.
     :return: A collection of metrics evaluating the learner's performance.
     """
+    epochs = epochs or 1
     n_tasks = len(train_streams)
     if n_tasks != len(test_streams):
         raise ValueError("Number of train and test tasks must be equal")
@@ -504,26 +527,27 @@ def ocl_train_eval_loop(
         disable=not progress_bar,
         desc="Train & Eval",
     )
-    
-    train_batches = list()
+
     # Iterate over each task
-    #TODO: delay random batches
     for train_task_id, train_stream in enumerate(train_streams):
         # Setup stream and inform learner of the test task
         if isinstance(learner, TrainTaskAware):
             learner.on_train_task(train_task_id)
 
-        # Train and evaluation loop for a single task
-        for step, (xb, yb) in enumerate(train_stream):
-            # Update the learner and collect prequential statistics
-            xb: Tensor
-            yb: Tensor
-            pbar.update(1)
-            yb_pred, _ = _batch_test(learner, xb)
-            _batch_train(learner, xb, yb, train_task_id)
-            for y, y_pred in zip(yb, yb_pred, strict=True):
-                online_eval.update(y.item(), y_pred)
-                windowed_eval.update(y.item(), y_pred)
+        step = 0
+        for _ in range(epochs):
+            # Train and evaluation loop for a single task
+            for xb, yb in train_stream:
+                # Update the learner and collect prequential statistics
+                xb: Tensor
+                yb: Tensor
+                pbar.update(1)
+                yb_pred = _batch_test(rng, learner, xb)
+                _batch_train(learner, xb, yb)
+
+                for y, y_pred in zip(yb, yb_pred, strict=True):
+                    online_eval.update(y.item(), y_pred)
+                    windowed_eval.update(y.item(), y_pred)
 
                 # Evaluate the learner on evenly spaced steps during training
                 evaluate_every = (len(train_stream) * epochs) // continual_evaluations
@@ -539,10 +563,10 @@ def ocl_train_eval_loop(
                         if isinstance(learner, TestTaskAware):
                             learner.on_test_task(test_task_id)
 
-                    # predict instances in the current task
-                    for test_xb, test_yb in test_stream:
-                        pbar.update(1)
-                        yb_pred, _  = _batch_test(learner, test_xb)
+                        # predict instances in the current task
+                        for test_xb, test_yb in test_stream:
+                            pbar.update(1)
+                            yb_pred = _batch_test(rng, learner, test_xb)
 
                             for y, y_pred in zip(test_yb, yb_pred):
                                 metrics.holdout_update(
@@ -571,7 +595,6 @@ def ocl_train_eval_loop(
             cpu_time=elapsed_cpu_time,
         ),
         boundary_instances,
-        total_flops=0.0,
     )
 
 
@@ -665,7 +688,7 @@ def ocl_train_eval_delayed_loop(
             xb: Tensor
             yb: Tensor
             pbar.update(1)
-            yb_pred, yb_pred_proba = _batch_test(learner, xb)
+            yb_pred, yb_pred_proba = _batch_test_delayed(learner, xb)
                           
             if (len(no_delayed_tasks) > 0 and train_task_id in no_delayed_tasks) or (batches_no_delay < start_delay_size):
                 # TODO: The case of learning is EDR
@@ -727,7 +750,7 @@ def ocl_train_eval_delayed_loop(
                     # predict instances in the current task
                     for test_xb, test_yb in test_stream:
                         pbar.update(1)
-                        yb_pred, yb_pred_proba = _batch_test(learner, test_xb)
+                        yb_pred, yb_pred_proba = _batch_test_delayed(learner, test_xb)
 
                         for y, y_pred in zip(test_yb, yb_pred):
                             metrics.holdout_update(
@@ -852,7 +875,7 @@ def ocl_train_eval_mixed_delayed_loop(
             xb: Tensor
             yb: Tensor
             pbar.update(1)
-            yb_pred, yb_pred_proba = _batch_test(learner, xb)
+            yb_pred, yb_pred_proba = _batch_test_delayed(learner, xb)
 
             if train_task_id != 0 and torch.rand(1).item() < prob_no_delay_batches:
                 train_batches_no_delay.append((xb, yb, yb_pred_proba, 1))
@@ -876,7 +899,8 @@ def ocl_train_eval_mixed_delayed_loop(
                         isinstance(learner, RAR) or
                         isinstance(learner, GDumb) or
                         isinstance(learner, NCM) or
-                        isinstance(learner, SLDA)):
+                        isinstance(learner, SLDA) or
+                        isinstance(learner, EWC)):
                         # batches_instances = train_batches[:number_delayed_batches]
                         # del train_batches[:number_delayed_batches]
                         
@@ -890,21 +914,23 @@ def ocl_train_eval_mixed_delayed_loop(
                             # print("RER_f")
                             # sort batches_instances by delay
                             batches_instances = sorted(batches_instances, key=lambda x: x[3])
-                            _batch_train(learner, batches_instances[0][0], batches_instances[0][1], train_task_id)
+                            _batch_train_delayed(learner, batches_instances[0][0], batches_instances[0][1], train_task_id)
                         elif er_strategy == "ER_l":
                             # print("RER_l")
                             # sort batches_instances by delay
                             batches_instances = sorted(batches_instances, key=lambda x: x[3], reverse=True)
-                            _batch_train(learner, batches_instances[0][0], batches_instances[0][1], train_task_id)
-                        elif (
-                            er_strategy == "ER_2B"
-                            or er_strategy == "gdumb"
-                            or er_strategy == "ncm"
-                            or er_strategy == "slda"
-                            or er_strategy == "ER-ACE"
-                            or er_strategy == "ER-ACE-Agu"
-                            or er_strategy == "RAR"
-                        ):
+                            _batch_train_delayed(learner, batches_instances[0][0], batches_instances[0][1], train_task_id)
+                        # elif (
+                        #     er_strategy == "ER_2B"
+                        #     or er_strategy == "gdumb"
+                        #     or er_strategy == "ncm"
+                        #     or er_strategy == "slda"
+                        #     or er_strategy == "ER-ACE"
+                        #     or er_strategy == "ER-ACE-Agu"
+                        #     or er_strategy == "RAR"
+                        #     or er_strategy == "EWC"
+                        # ):
+                        else:
                             batches_instances = sorted(batches_instances, key=lambda x: x[3], reverse=True)
                             selected_batch = batches_instances[0]
                             
@@ -912,7 +938,7 @@ def ocl_train_eval_mixed_delayed_loop(
                                 old_batch = batches_instances[1]
                                 train_batches_delayed.insert(0, old_batch)
                                 
-                            _batch_train(learner, selected_batch[0], selected_batch[1], train_task_id)
+                            _batch_train_delayed(learner, selected_batch[0], selected_batch[1], train_task_id)
 
                     else:
                         # print("EDR learner")
@@ -921,10 +947,12 @@ def ocl_train_eval_mixed_delayed_loop(
                         _batch_mixed_delayed_train(learner, batches_instances, train_task_id)
 
                     if track_flops:
-                        model = learner.learner.model
+                        model = getattr(getattr(learner, "learner", None), "model", None)
+                        if model is None:
+                            model = learner._model
                         model.eval()
                         with torch.no_grad():
-                            trained_input = batches_instances[0][0].to(device=learner.learner.device, dtype=learner.learner.x_dtype)
+                            trained_input = batches_instances[0][0].to(dtype=learner.x_dtype, device=learner.device)
                             # Use torchprofile for FLOP counting
                             macs = profile_macs(model, trained_input)
                             flops_forward = 2 * macs  # Approximate FLOPs as 2 * MACs
@@ -956,7 +984,7 @@ def ocl_train_eval_mixed_delayed_loop(
                     # predict instances in the current task
                     for test_xb, test_yb in test_stream:
                         pbar.update(1)
-                        yb_pred, yb_pred_proba = _batch_test(learner, test_xb)
+                        yb_pred, yb_pred_proba = _batch_test_delayed(learner, test_xb)
 
                         for y, y_pred in zip(test_yb, yb_pred):
                             metrics.holdout_update(

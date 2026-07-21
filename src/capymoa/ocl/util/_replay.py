@@ -133,6 +133,7 @@ class SlidingWindow(ReplayBuffer):
     def update(self, x: Tensor, y: Tensor) -> None:
         x = x.to(self.device)
         y = y.to(self.device)
+        x = x.view(x.size(0), -1)
         batch_size = x.shape[0]
 
         # Calculate where the batch ends
