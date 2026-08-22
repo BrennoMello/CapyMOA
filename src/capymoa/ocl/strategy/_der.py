@@ -1,14 +1,16 @@
 import torch
 from torch import Tensor
+from torch.nn import functional as F
 
 from capymoa.base import BatchClassifier
-from capymoa.ocl.util._replay import ReservoirSampler
+from capymoa.ocl.util._replay import ReservoirLogitSampler
 from capymoa.ocl.base import TrainTaskAware, TestTaskAware
+
 
 from typing import Callable
 
-
 class DER(BatchClassifier, TrainTaskAware, TestTaskAware):
+    #TODO: Change the docstring to reflect the new name of the class
     """Continual learning via Dark Experience Replay.
 
     Dark Experience Replay (DER) [#f0]_ is a replay continual learning
@@ -78,15 +80,12 @@ class DER(BatchClassifier, TrainTaskAware, TestTaskAware):
         learner: BatchClassifier,
         augment: Callable[[Tensor], Tensor],
         coreset_size: int = 200,
+        alpha: float = 0.3,
         repeats: int = 1,
     ) -> None:
-        """Initialize Repeated Augmented Rehearsal.
+        """Initialize Dark Experience Replay.
 
         :param learner: Underlying learner to be trained with RAR.
-        :param augment: Data augmentation function to apply to the samples. Should take
-            a Tensor of shape ``(batch_size, *schema.shape)`` and return a Tensor of the
-            same shape. Take a look at the PyTorch torchvision transforms for some
-            building blocks for your pipeline (https://docs.pytorch.org/vision/main/transforms.html).
         :param coreset_size: Size of the coreset buffer.
         :param repeats: Number of times to repeat training on each batch, defaults to 1.
         """
@@ -94,33 +93,47 @@ class DER(BatchClassifier, TrainTaskAware, TestTaskAware):
         super().__init__(learner.schema)
         num_features = learner.schema.get_num_attributes()
         self.learner = learner
-        self.augment = augment
+        
         self.repeats = repeats
-        self.coreset = ReservoirSampler(
+        self.coreset = ReservoirLogitSampler(
             coreset_size,
             num_features,
+            learner.schema.get_num_classes(),
             rng=torch.Generator().manual_seed(learner.random_seed),
         )
+        self.augment = augment
+        self.alpha = alpha
         self.shape = learner.schema.shape
 
     def train_step(self, x_fresh: Tensor, y_fresh: Tensor) -> None:
-        # Sample from reservoir and augment the data
-        n = x_fresh.shape[0]
-        x_replay, y_replay = self.coreset.sample(n)
-        x = torch.cat((x_fresh, x_replay), dim=0).to(self.device, self.x_dtype)
-        y = torch.cat((y_fresh, y_replay), dim=0).to(self.device, self.y_dtype)
-        x = x.view(-1, *self.shape)
-        x: Tensor = self.augment(x)
 
-        # Train the learner
-        x = x.to(self.learner.device, self.learner.x_dtype)
-        y = y.to(self.learner.device, self.learner.y_dtype)
-        self.learner.batch_train(x, y)
+        y_fresh = y_fresh.to(self.learner.device, self.learner.y_dtype)
+        n = x_fresh.shape[0]
+
+        x_fresh = x_fresh.view(-1, *self.shape)
+        x_fresh_aug = self.augment(x_fresh)
+        outputs_logits = self.learner.predict_logits(x_fresh_aug)
+        loss_fresh = self.learner.criterion(outputs_logits, y_fresh)
+
+        if self.coreset.count != 0:
+            x_replay, y_replay, logits_replay = self.coreset.sample(n)
+            logits_replay = logits_replay.to(self.learner.device, self.learner.x_dtype)
+
+            x_replay = x_replay.view(-1, *self.shape)
+            x_replay_aug = self.augment(x_replay)
+
+            outputs_logits_replay = self.learner.predict_logits(x_replay_aug)
+            loss_mse = self.alpha * F.mse_loss(outputs_logits_replay, logits_replay)
+            loss_fresh += loss_mse
+
+        self.learner.update_learner(loss_fresh)
+
+        self.coreset.update(x_fresh, y_fresh, outputs_logits.detach())
 
     def batch_train(self, x: Tensor, y: Tensor) -> None:
-        self.coreset.update(x, y)
         for i in range(self.repeats):
             self.train_step(x, y)
+        
 
     @torch.no_grad()
     def batch_predict_proba(self, x: Tensor) -> Tensor:

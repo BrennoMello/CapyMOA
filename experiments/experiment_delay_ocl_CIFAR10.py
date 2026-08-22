@@ -11,14 +11,14 @@ if __name__ == "__main__":
         # "strategies": ["gdumb", "ncm", "slda"],
         # "strategies": ["EDR","EDR-ACE", "RER", "ER_f", "ER_l", "ER_2B", "ER-ACE", "ER-ACE-Agu", "RAR"],
         # "strategies": ["EDR-ACE", "RAR"],
-        "strategies": ["EDR", "ER_2B", "ER_l", "ER-ACE", "RER"],
+        "strategies": ["DER", "DERPP", "EWC", "RAR"],
         # "datasets": ["SplitMNIST", "SplitFashionMNIST", "SplitCIFAR10", "SplitCIFAR100", "SplitMiniImagenet"],
         "datasets": ["SplitCIFAR10"],
     }
     
     config = {
-        "batch_size": 10,
-        "buffer_size": 100,
+        "batch_size": 32,
+        "buffer_size": 128,
         "num_tasks": 5,
         "hidden_size": 64,
         "eval_window_size": 128,

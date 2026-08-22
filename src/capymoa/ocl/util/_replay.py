@@ -159,3 +159,60 @@ class SlidingWindow(ReplayBuffer):
         # Update index and count
         self._i = (self._i + batch_size) % self.capacity
         self._count = min(self._count + batch_size, self.capacity)
+
+
+class ReservoirLogitSampler(ReplayBuffer):
+
+    def __init__(
+        self,
+        capacity: int,
+        features: int,
+        num_classes: int,
+        rng: torch.Generator = torch.Generator(),
+    ) -> None:
+        super().__init__(capacity, features, rng)
+        self._num_classes = num_classes
+        self._buffer_logits = nn.Buffer(torch.zeros((capacity, num_classes)))
+
+    def sample(self, n: int) -> Tuple[Tensor, Tensor, Tensor]:
+            """Sample ``n`` examples from the replay buffer.
+    
+            :param n: Number of examples to sample
+            :return: Tuple of (x, y, logits) where x is a Tensor of shape (n, features), y is a
+                Tensor of shape (n,) with class labels, and logits is a Tensor of shape (n, features)
+            """
+            indices = torch.randint(0, self.count, (n,))
+            return self._buffer_x[indices], self._buffer_y[indices], self._buffer_logits[indices]
+
+    @override
+    def update(self, x: Tensor, y: Tensor, logits: Tensor) -> None:
+        x = x.to(self.device)
+        y = y.to(self.device)
+        logits = logits.to(self.device)
+
+        batch_size = x.shape[0]
+        self.original_shape = x.shape[1:]
+        x = x.view(batch_size, self._features).to(self.device)
+        
+        assert x.shape == (
+            batch_size,
+            self._features,
+        )
+        assert y.shape == (batch_size,)
+        assert logits.shape == (batch_size, self._num_classes)
+
+        for i in range(batch_size):
+            if self.count < self.capacity:
+                # Fill the reservoir
+                self._buffer_x[self.count] = x[i]
+                self._buffer_y[self.count] = y[i]
+                self._buffer_logits[self.count] = logits[i]
+                self._count += 1
+            else:
+                # Reservoir sampling
+                index = torch.randint(0, self._i + 1, (1,), generator=self._rng)
+                if index < self.capacity:
+                    self._buffer_x[index] = x[i]
+                    self._buffer_y[index] = y[i]
+                    self._buffer_logits[index] = logits[i]
+            self._i += 1

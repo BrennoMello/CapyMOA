@@ -577,17 +577,3 @@ class ACELoss(nn.CrossEntropyLoss):
         loss = super().forward(logits, target)
 
         return loss 
-
-    # def forward(self, logits: Tensor, target: Tensor) -> Tensor:
-    #     present = target.unique()
-    #     self.seen_so_far = torch.cat([self.seen_so_far, present]).unique()
-
-    #     mask = torch.zeros_like(logits)
-    #     mask[:, present] = 1
-    #     mask[:, self.seen_so_far.max():] = 1
-
-    #     logits  = logits.masked_fill(mask == 0, -1e9)
-            
-    #     loss = super().forward(logits, target)
-
-    #     return loss

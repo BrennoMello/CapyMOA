@@ -5,7 +5,7 @@ import os
 from typing import List, Optional, Sequence, Tuple, Union
 
 from capymoa.ocl.strategy import (
-        ExperienceReplay, GDumb, NCM, SLDA, RAR, EWC
+        ExperienceReplay, GDumb, NCM, SLDA, RAR, EWC, DER, DERPP
     )
 from capymoa.ann import ResNet18
 
@@ -900,7 +900,9 @@ def ocl_train_eval_mixed_delayed_loop(
                         isinstance(learner, GDumb) or
                         isinstance(learner, NCM) or
                         isinstance(learner, SLDA) or
-                        isinstance(learner, EWC)):
+                        isinstance(learner, EWC) or
+                        isinstance(learner, DER) or
+                        isinstance(learner, DERPP)):
                         # batches_instances = train_batches[:number_delayed_batches]
                         # del train_batches[:number_delayed_batches]
                         

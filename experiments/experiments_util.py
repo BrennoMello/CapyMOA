@@ -11,12 +11,14 @@ from capymoa.ocl.evaluation import (
 from capymoa.ocl.strategy import (
     ExperienceReplay, ExperienceDelayReplay, ExperienceReplayACE,
     ExperienceReplayAsymmetricCrossEntropy, ACELoss,
-    GDumb, NCM, SLDA, RAR, EWC
+    GDumb, NCM, SLDA, RAR, EWC, DER, DERPP
     )
 from capymoa.ann import (
     Perceptron, ResNet18
     )
-import torchvision.transforms as T
+
+from torchvision.transforms import Compose, v2 as T
+
 from plot import plot_multiple, ocl_plot
 from capymoa.classifier import Finetune
 import plotly.express as px
@@ -83,6 +85,7 @@ def run_experiment(config: dict[str, str | int | float]):
     else:        
         ann = Perceptron(schema=stream.schema, hidden_size=config["hidden_size"])
 
+
     finetune = Finetune(schema=stream.schema, model=ann, device=device)
 
     if config["strategy"] in ["RER", "ER_f", "ER_l", "ER_2B"]:
@@ -125,6 +128,22 @@ def run_experiment(config: dict[str, str | int | float]):
                                 coreset_size=config["buffer_size"],
                                 augment=augment,
                             )
+    elif config["strategy"] == "DER":
+        augment = get_augumentations(config["dataset"])
+        learner_experience = DER(
+                                learner=finetune,
+                                coreset_size=config["buffer_size"],
+                                augment=augment,
+                            )
+        
+    elif config["strategy"] == "DERPP":
+        augment = get_augumentations(config["dataset"])
+        learner_experience = DERPP(
+                                    learner=finetune,
+                                    coreset_size=config["buffer_size"],
+                                    augment=augment,
+                                )
+
     elif config["strategy"] == "gdumb":
         learner_experience = GDumb(
             schema=stream.schema,
@@ -179,6 +198,39 @@ def run_experiment(config: dict[str, str | int | float]):
             progress_bar=True,  
             eval_window_size=config["eval_window_size"],
         ) 
+
+def get_augumentations(dataset: str):
+    if dataset in ["SplitMNIST", "SplitFashionMNIST"]:
+        augment = T.Compose([
+                                nn.Identity(),
+                            ])
+    elif dataset == "SplitCIFAR10":
+        augment = T.Compose([
+                        T.RandomCrop(size=32, padding=4),
+                        T.RandomHorizontalFlip(p=0.5),
+                        T.ToImage(),
+                        T.ToDtype(torch.float32, scale=True),
+                        T.Normalize(mean=[0.4914, 0.4822, 0.4465], std=[0.2470, 0.2435, 0.2616]),
+                    ])
+    elif dataset == "SplitCIFAR100":
+        augment = T.Compose([
+                        T.RandomCrop(size=32, padding=4),
+                        T.RandomHorizontalFlip(),
+                        T.ToDtype(torch.float32, scale=True),
+                        T.Normalize(mean=[0.5071, 0.4867, 0.4408], std=[0.2675, 0.2565, 0.2761]),
+                    ])
+    elif dataset in ["SplitTinyImagenet", "SplitMiniImagenet"]:
+        augment = T.Compose([
+                            T.RandomCrop(size=64, padding=4),
+                            T.RandomHorizontalFlip(),
+                            T.ToImage(),
+                            T.ToDtype(torch.float32, scale=True),
+                            T.Normalize(mean=[0.4802, 0.4480, 0.3975], std=[0.2770, 0.2691, 0.2821]),
+                        ])
+    else:
+        raise ValueError(f"Dataset {dataset} not recognized for augmentation.")
+    
+    return augment
 
 def plot_task_results(results, config):
     plots = ocl_plot(

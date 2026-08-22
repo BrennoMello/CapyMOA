@@ -7,6 +7,8 @@ from ._gdumb import GDumb
 from ._rar import RAR
 from . import l2p
 from ._ewc import EWC
+from ._der import DER
+from ._derpp import DERPP
 
 __all__ = [
     "ExperienceReplay",
@@ -19,5 +21,7 @@ __all__ = [
     "GDumb",
     "RAR",
     "l2p", 
-    "EWC"
+    "EWC",
+    "DER",
+    "DERPP",
 ]

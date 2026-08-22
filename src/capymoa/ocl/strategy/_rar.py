@@ -7,7 +7,6 @@ from capymoa.ocl.base import TrainTaskAware, TestTaskAware
 
 from typing import Callable
 
-
 class RAR(BatchClassifier, TrainTaskAware, TestTaskAware):
     """Repeated Augmented Rehearsal.
 
